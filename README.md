@@ -9,6 +9,11 @@ Telegram-пульт для [soundiya](https://github.com/ShadowBlade83/soundiya)
 - Карточку со звуком получает тот, кто включил; `/notify on|off` у каждого свой
 - Новые версии soundiya: бот сообщает, есть ли в них `STATE`, и ставит по кнопке
 
+<p align="center">
+  <img src="docs/bot-card.jpg" height="440" alt="Карточка «что играет»">
+  <img src="docs/bot-menu.jpg" height="440" alt="Меню команд">
+</p>
+
 > Нужна soundiya с командами `STATE`/`JUMP` — ветка [`bot-api`](https://github.com/genaRijoff/soundiya/tree/bot-api) форка. Скрипт сборки соберёт её сам.
 
 ## Что нужно
