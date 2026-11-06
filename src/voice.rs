@@ -124,6 +124,8 @@ pub struct Files {
     pub ogg: PathBuf,
     decoded: PathBuf,
     pub pcm: PathBuf,
+    /// The decoder's output, in root's folder where `nobody` cannot swap it for a link.
+    log: PathBuf,
 }
 impl Files {
     /// `id` names the files: letters, digits and `-` only (soundiya checks the name too).
@@ -138,6 +140,7 @@ impl Files {
             ogg: work.join("in.oga"),
             decoded: work.join("out.pcm"),
             pcm: dir.join(format!("{id}.pcm")),
+            log: dir.join(format!("{id}.log")),
             work,
         }
     }
@@ -152,13 +155,17 @@ impl Files {
             std::os::unix::fs::chown(&self.work, Some(uid), Some(gid))
                 .map_err(|e| format!("{}: {e}", self.work.display()))?;
         }
-        // Readable for the decoder; nobody else gets into `work`.
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o644)
+            .mode(0o600)
             .open(&self.ogg)
             .map_err(|e| format!("{}: {e}", self.ogg.display()))?;
+        // The bot runs with umask 077 (run.sh): the decoder can read its input only as its owner.
+        if let Some((uid, gid)) = nobody() {
+            std::os::unix::fs::chown(&self.ogg, Some(uid), Some(gid))
+                .map_err(|e| format!("{}: {e}", self.ogg.display()))?;
+        }
         file.write_all(data).map_err(|e| e.to_string())
     }
 
@@ -188,10 +195,14 @@ impl Files {
     /// the old GStreamer gets no root. The result is copied out of the work folder (checked,
     /// see [`take_decoded`]) and the work folder with the OGG is deleted right after.
     pub async fn decode(&self, gst: &str) -> Result<(), String> {
-        let result = match decode(gst, &self.ogg, &self.decoded, nobody()).await {
+        let result = match decode(gst, &self.ogg, &self.decoded, nobody(), &self.log).await {
             Ok(()) => take_decoded(&self.decoded, &self.pcm),
-            Err(e) => Err(e),
+            Err(e) => {
+                log_decoder_errors(&self.log);
+                Err(e)
+            }
         };
+        let _ = fs::remove_file(&self.log);
         let _ = fs::remove_dir_all(&self.work);
         result
     }
@@ -200,6 +211,27 @@ impl Drop for Files {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.work);
         let _ = fs::remove_file(&self.pcm);
+        let _ = fs::remove_file(&self.log);
+    }
+}
+
+/// GStreamer's own complaints, so a failure says why (paths and errors only, no audio).
+fn log_decoder_errors(log: &Path) {
+    let Ok(text) = fs::read(log) else {
+        return eprintln!("voice: the decoder wrote no log");
+    };
+    let text = String::from_utf8_lossy(&text);
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| {
+            let l = l.to_ascii_lowercase();
+            ["error", "denied", "permission", "fail", "no such", "warn"]
+                .iter()
+                .any(|w| l.contains(w))
+        })
+        .collect();
+    for line in &lines[lines.len().saturating_sub(5)..] {
+        eprintln!("voice: gst: {}", line.chars().take(200).collect::<String>());
     }
 }
 
@@ -238,7 +270,13 @@ fn take_decoded(from: &Path, to: &Path) -> Result<(), String> {
     out.write_all(&data).map_err(|e| e.to_string())
 }
 
-async fn decode(gst: &str, ogg: &Path, pcm: &Path, user: Option<(u32, u32)>) -> Result<(), String> {
+async fn decode(
+    gst: &str,
+    ogg: &Path,
+    pcm: &Path,
+    user: Option<(u32, u32)>,
+    log: &Path,
+) -> Result<(), String> {
     let source = format!("location={}", ogg.display());
     let sink = format!("location={}", pcm.display());
     let caps = format!("audio/x-raw,format=S16LE,rate={RATE},channels=1");
@@ -260,18 +298,25 @@ async fn decode(gst: &str, ogg: &Path, pcm: &Path, user: Option<(u32, u32)>) -> 
         &sink,
     ];
     // No shell: every part is its own argument.
+    // The decoder works in the message's folder: the bot's own working directory may be gone
+    // (the installer's) or closed to `nobody`.
+    let work = ogg.parent().unwrap_or(Path::new("/tmp"));
+    let log = fs::File::create(log).map_err(|e| format!("GStreamer log: {e}"))?;
+    let log_err = log.try_clone().map_err(|e| e.to_string())?;
     let mut command = Command::new(gst);
     if let Some((uid, gid)) = user {
         // Supplementary groups are dropped too when the uid changes from root.
         command.uid(uid).gid(gid);
     }
     let mut child = command
+        .current_dir(work)
+        .env("HOME", work)
         .env("LD_LIBRARY_PATH", GST_LIBS)
         .arg("--gst-launch")
         .args(pipeline)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err))
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("GStreamer: {e}"))?;
@@ -409,7 +454,7 @@ mod tests {
             ),
         );
         let started = std::time::Instant::now();
-        let result = runtime().block_on(decode(&gst, &ogg, &pcm, None));
+        let result = runtime().block_on(decode(&gst, &ogg, &pcm, None, &pcm.with_extension("log")));
         assert_eq!(result.unwrap_err(), "голосовое длиннее 1 минуты");
         assert!(started.elapsed() < Duration::from_secs(10));
         // Stopped soon after the limit, not long after.
@@ -423,10 +468,18 @@ mod tests {
             "ok",
             "head -c 64000 /dev/zero > \"$(echo \"$@\" | sed 's/.*location=//')\"",
         );
-        assert!(runtime().block_on(decode(&gst, &ogg, &pcm, None)).is_ok());
+        assert!(
+            runtime()
+                .block_on(decode(&gst, &ogg, &pcm, None, &pcm.with_extension("log")))
+                .is_ok()
+        );
         assert_eq!(fs::metadata(&pcm).unwrap().len(), 64000);
         let (gst, ogg, pcm) = fake_gst("empty", "exit 0");
-        assert!(runtime().block_on(decode(&gst, &ogg, &pcm, None)).is_err());
+        assert!(
+            runtime()
+                .block_on(decode(&gst, &ogg, &pcm, None, &pcm.with_extension("log")))
+                .is_err()
+        );
         for dir in ["ok", "empty"] {
             let _ = fs::remove_dir_all(std::env::temp_dir().join(format!(
                 "soundiya-tg-voice-test-{}-{dir}",

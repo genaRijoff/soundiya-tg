@@ -29,10 +29,12 @@ open(TONE, "wb").write(b"".join(struct.pack("<h", int(1500 * math.sin(n * 440 * 
 # Stand-in for `maind --gst-launch ...`: checks the pipeline, then "decodes" to the tone.
 gst = os.path.join(WORK, "fake-gst.sh")
 open(gst, "w").write(f"""#!/bin/sh
-echo "uid=$(id -u) $LD_LIBRARY_PATH $*" >> {WORK}/gst-args.txt
+echo "uid=$(id -u) cwd=$(pwd) $LD_LIBRARY_PATH $*" >> {WORK}/gst-args.txt
+echo "decoder: starting" 
 src=""; dst=""
 for a in "$@"; do case "$a" in location=*.oga) src=${{a#location=}};; location=*.pcm) dst=${{a#location=}};; esac; done
 [ -f "$src" ] && [ -n "$dst" ] || exit 1
+cat "$src" > /dev/null || exit 1
 cp {TONE} "$dst"
 """)
 os.chmod(gst, 0o755)
@@ -124,7 +126,9 @@ base = f"http://127.0.0.1:{http.server_address[1]}"
 cfg = os.path.join(WORK, "config.json")
 json.dump({"token": TOKEN, "users": [OWNER], "api": base, "updates": False, "gst": gst}, open(cfg, "w")); os.chmod(cfg, 0o600)
 time.sleep(0.3)
-p = subprocess.Popen([BIN, "run", "--config", cfg, "--socket", SOCK], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+# As run.sh on the station: umask 077, so whatever the bot creates is private unless it says so.
+p = subprocess.Popen([BIN, "run", "--config", cfg, "--socket", SOCK], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                     preexec_fn=lambda: os.umask(0o077))
 time.sleep(16); p.terminate(); out, err = p.communicate(timeout=10)
 
 fails = []
@@ -144,6 +148,7 @@ check(json.load(open(os.path.join(WORK, "access.json"))).get("voice_volume") == 
       and json.load(open(os.path.join(WORK, "access.json"))).get("voice_from") == "all", "/voicevol and /voice are saved")
 check(voice_seen.get("mode") == "0o711", "the voice folder is not listable")
 check(gst_args.count("uid=65534 ") == 2 and "uid=0 " not in gst_args, "GStreamer runs as nobody, not root")
+check("cwd=/tmp/soundiya-tg-voice/v42-10.d " in gst_args, "GStreamer works in the message's folder")
 check("/system/vendor/quasar/libs --gst-launch filesrc location=/tmp/soundiya-tg-voice/v42-10.d/in.oga" in gst_args and "! opusdec !" in gst_args
       and "audio/x-raw,format=S16LE,rate=16000,channels=1" in gst_args, "GStreamer decodes Opus to 16 kHz mono")
 check(any("Голосовое проиграно (2 с)" in t for _, t in texts), "the owner sees: played")
