@@ -5,6 +5,17 @@ use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 pub const DEFAULT_PATH: &str = "/data/opt/soundiya-tg/config.json";
 const DEFAULT_API: &str = "https://api.telegram.org";
 
+/// Who may send voice messages to the speaker.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VoiceFrom {
+    #[default]
+    Owners,
+    /// Owners and approved listeners; owners see who sent one.
+    All,
+    Off,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -40,6 +51,12 @@ pub struct Config {
     pub github_download: String,
     #[serde(default = "default_autoupdate")]
     pub autoupdate: String,
+    /// Voice messages to the speaker: `owners` (default), `all` or `off`.
+    #[serde(default)]
+    pub voice: VoiceFrom,
+    /// The program that decodes them (Alice's `maind --gst-launch`); only tests change it.
+    #[serde(default = "default_gst")]
+    pub gst: String,
 }
 
 fn yes() -> bool {
@@ -68,6 +85,9 @@ fn default_github_download() -> String {
 }
 fn default_autoupdate() -> String {
     crate::updates::AUTOUPDATE.to_owned()
+}
+fn default_gst() -> String {
+    crate::voice::DEFAULT_GST.to_owned()
 }
 fn secure_url(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://127.0.0.1")
@@ -110,14 +130,14 @@ impl Config {
         {
             return Err("api and the github_* endpoints must be https:// URLs".into());
         }
-        // The path goes into a shell command.
-        if !self.autoupdate.starts_with('/')
-            || !self
-                .autoupdate
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-'))
-        {
-            return Err("autoupdate must be an absolute path of [A-Za-z0-9/._-]".into());
+        // The autoupdate path goes into a shell command.
+        let path_ok = |p: &str| {
+            p.starts_with('/')
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-'))
+        };
+        if !path_ok(&self.autoupdate) || !path_ok(&self.gst) {
+            return Err("autoupdate and gst must be absolute paths of [A-Za-z0-9/._-]".into());
         }
         let name = |part: &str| {
             !part.is_empty()
@@ -173,6 +193,8 @@ mod tests {
         assert_eq!(config.issue_repo, "ShadowBlade83/soundiya");
         assert_eq!(config.watch_issue, 0);
         assert_eq!(config.autoupdate, crate::updates::AUTOUPDATE);
+        assert_eq!(config.voice, VoiceFrom::Owners);
+        assert_eq!(config.gst, "/system/vendor/quasar/maind");
     }
 
     #[test]
@@ -200,6 +222,8 @@ mod tests {
             format!(r#"{{"token":"{TOKEN}","users":[42],"issue_repo":"a"}}"#),
             format!(r#"{{"token":"{TOKEN}","users":[42],"autoupdate":"/x; reboot"}}"#),
             format!(r#"{{"token":"{TOKEN}","users":[42],"autoupdate":"relative.sh"}}"#),
+            format!(r#"{{"token":"{TOKEN}","users":[42],"gst":"/x y"}}"#),
+            format!(r#"{{"token":"{TOKEN}","users":[42],"voice":"everyone"}}"#),
         ] {
             let file = write(0o600, &text);
             assert!(Config::load(file.path()).is_err(), "{text}");

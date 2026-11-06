@@ -209,7 +209,8 @@ pub const HELP: &str = "🎧 <b>soundiya</b> — пульт SoundCloud на ко
 pub const OWNER_HELP: &str = "\n\n<b>Владельцу:</b>\n\
 /users — кто ещё управляет музыкой\n\
 /allow ID [имя], /deny ID — выдать или забрать доступ\n\
-/updates — новые версии soundiya";
+/updates — новые версии soundiya\n\
+🎙 Голосовое сообщение — колонка проиграет его, музыка встанет на паузу (до 1 мин, 2 МБ)";
 
 pub const COMMANDS: &[(&str, &str)] = &[
     ("now", "Что играет"),
@@ -243,6 +244,7 @@ mod tests {
             sleep: None,
             signed_in: true,
             volume: None,
+            voice: false,
             queue: (1..=tracks)
                 .map(|i| Entry {
                     id: i as u64,

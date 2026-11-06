@@ -17,6 +17,7 @@ Telegram-пульт для [soundiya](https://github.com/ShadowBlade83/soundiya)
 - Карточка «что играет»: трек, прогресс, громкость, таймер сна; кнопки ⏮ ⏯ ⏭, ±15 с, 🔉/🔊 ±10, 🔁, 😴
 - Очередь (до 25 треков): нажал номер — играет этот трек
 - Название или ссылка soundcloud.com — найдёт и включит
+- 🎙 Голосовое сообщение — колонка проиграет его: музыка встанет на паузу и продолжится после (до 1 минуты и 2 МБ; по умолчанию только владелец)
 - Владелец и слушатели: друг пишет боту — тебе приходит запрос ✅/⛔
 - Карточку со звуком получает тот, кто включил; `/notify on|off` у каждого свой
 - Обновления soundiya: [форк](https://github.com/genaRijoff/soundiya/releases) сам собирает каждую новую версию автора с `STATE`, бот сообщает и ставит по кнопке
@@ -107,6 +108,7 @@ powershell -ExecutionPolicy Bypass -File .\windows\install-soundiya-build.ps1 -R
 | `github_repo` | `genaRijoff/soundiya` | чьи релизы проверять и ставить |
 | `issue_repo` | `ShadowBlade83/soundiya` | где `watch_issue` |
 | `watch_issue` | `0` | номер issue, о котором сообщать (0 — выкл.) |
+| `voice` | `owners` | кто может слать голосовые: `owners`, `all` (и слушатели; владельцу приходит, кто прислал), `off` |
 
 Слушатели и `/notify` хранятся в `access.json`, проверка обновлений — в `updates.json` (рядом, права 600). После правки: `/etc/init.d/S99soundiya-tg restart`.
 
@@ -122,7 +124,7 @@ powershell -ExecutionPolicy Bypass -File .\windows\install-soundiya-build.ps1 -R
 
 ```bash
 cargo test                                     # модульные
-cargo build && mkdir -p /tmp/e2e && for t in basic roles notify outage update; do python3 tests/e2e/$t.py target/debug/soundiya-tg /tmp/e2e || break; done   # сквозные (подставные Telegram, GitHub и soundiya)
+cargo build && mkdir -p /tmp/e2e && for t in basic roles notify outage update voice; do python3 tests/e2e/$t.py target/debug/soundiya-tg /tmp/e2e || break; done   # сквозные (подставные Telegram, GitHub и soundiya)
 ```
 
 ## Лицензия

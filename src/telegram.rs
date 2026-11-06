@@ -15,6 +15,8 @@ pub struct Api {
     /// otherwise be reused and fail one by one (`os error 110`).
     http: RwLock<reqwest::Client>,
     base: String,
+    /// Where `getFile` paths are downloaded from; holds the token too.
+    files: String,
 }
 
 /// Telegram's answers are small; a cap keeps a broken or hostile peer from filling the RAM.
@@ -132,6 +134,18 @@ pub struct Message {
     pub chat: Chat,
     pub from: Option<User>,
     pub text: Option<String>,
+    pub voice: Option<Voice>,
+}
+#[derive(Debug, Deserialize)]
+pub struct Voice {
+    pub file_id: String,
+    /// Seconds, as the sender's app measured.
+    pub duration: u64,
+    pub file_size: Option<u64>,
+}
+#[derive(Debug, Deserialize)]
+pub struct File {
+    pub file_path: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 pub struct Chat {
@@ -155,9 +169,11 @@ pub struct CallbackQuery {
 
 impl Api {
     pub fn new(api: &str, token: &str) -> Result<Self, String> {
+        let api = api.trim_end_matches('/');
         Ok(Api {
             http: RwLock::new(http_client()?),
-            base: format!("{}/bot{token}", api.trim_end_matches('/')),
+            base: format!("{api}/bot{token}"),
+            files: format!("{api}/file/bot{token}"),
         })
     }
 
@@ -276,6 +292,36 @@ impl Api {
         self.quick::<bool>("answerCallbackQuery", &body)
             .await
             .map(|_| ())
+    }
+
+    pub async fn get_file(&self, file_id: &str) -> Result<File, Error> {
+        self.quick("getFile", &json!({"file_id": file_id})).await
+    }
+
+    /// Downloads a file `get_file` pointed to, refusing more than `limit` bytes.
+    pub async fn download(&self, file_path: &str, limit: usize) -> Result<Vec<u8>, Error> {
+        let safe = !file_path.is_empty()
+            && !file_path.contains("..")
+            && file_path
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-' | b'.'));
+        if !safe {
+            return Err(Error::Network("unexpected file path from Telegram".into()));
+        }
+        let http = self.http.read().unwrap().clone();
+        let response = http
+            .get(format!("{}/{file_path}", self.files))
+            .timeout(Duration::from_secs(60))
+            .send()
+            .await
+            .map_err(|e| Error::Network(describe(e)))?;
+        if !response.status().is_success() {
+            return Err(Error::Network(format!(
+                "download: HTTP {}",
+                response.status()
+            )));
+        }
+        read_limited(response, limit).await.map_err(Error::Network)
     }
 
     /// The command menu next to the input field.

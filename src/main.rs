@@ -7,6 +7,7 @@ mod soundiya;
 mod telegram;
 mod updates;
 mod view;
+mod voice;
 
 use std::{path::PathBuf, process::ExitCode, sync::Arc};
 
@@ -97,6 +98,7 @@ fn run(config_path: PathBuf, socket: PathBuf) -> ExitCode {
         }
         let seen = config_path.with_file_name("updates.json");
         let access = config_path.with_file_name("access.json");
+        voice::reset_dir();
         let bot = Arc::new(bot::Bot::new(api, config, socket, seen, access));
         tokio::spawn(bot.clone().watch());
         tokio::spawn(bot.clone().watch_updates());

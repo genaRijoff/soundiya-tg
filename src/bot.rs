@@ -1,11 +1,11 @@
 //! Telegram updates in, soundiya commands out; a watcher keeps the player cards current.
 use crate::{
     access::{self, Access, Role},
-    config::Config,
+    config::{Config, VoiceFrom},
     soundiya::{self, State},
     telegram::{Api, CallbackQuery, Error, Message, Update, User},
     updates::{self, GitHub, Release, Seen},
-    view,
+    view, voice,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -43,6 +43,8 @@ pub struct Bot {
     seen_path: PathBuf,
     /// An install or rollback is running: a second press waits for it.
     updating: AtomicBool,
+    /// A voice message is on its way to the speaker: the next one waits.
+    voice_busy: AtomicBool,
     /// Listeners the owners let in, and where they are kept.
     access: Mutex<Access>,
     access_path: PathBuf,
@@ -161,6 +163,7 @@ impl Bot {
             github,
             seen_path,
             updating: AtomicBool::new(false),
+            voice_busy: AtomicBool::new(false),
             api,
             config,
             socket,
@@ -322,6 +325,9 @@ impl Bot {
 
     async fn handle(self: Arc<Self>, update: Update) {
         if let Some(message) = update.message {
+            if message.voice.is_some() {
+                return self.on_voice(message).await;
+            }
             self.on_message(message).await;
         } else if let Some(query) = update.callback_query {
             self.on_callback(query).await;
@@ -423,6 +429,118 @@ impl Bot {
             }
             Err(e) => self.reply(chat, &format!("⚠️ {}", view::esc(&e))).await,
         }
+    }
+
+    // ---- voice messages ----
+
+    async fn on_voice(self: Arc<Self>, message: Message) {
+        let (Some(from), Some(voice)) = (message.from.as_ref(), message.voice.as_ref()) else {
+            return;
+        };
+        let (user, chat) = (from.id, message.chat.id);
+        if message.chat.kind != "private" {
+            return;
+        }
+        let role = self.role(user);
+        match (role, self.config.voice) {
+            (Role::Stranger, _) => return self.stranger(from, chat).await,
+            (_, VoiceFrom::Off) => {
+                return self.reply(chat, "🎙 Голосовые на колонку выключены.").await;
+            }
+            (Role::Listener, VoiceFrom::Owners) => {
+                return self
+                    .reply(
+                        chat,
+                        "🎙 Голосовые на колонку может отправлять только владелец.",
+                    )
+                    .await;
+            }
+            _ => {}
+        }
+        if let Err(text) = voice::limits(voice.duration, voice.file_size) {
+            return self.reply(chat, text).await;
+        }
+        if self.voice_busy.swap(true, Ordering::AcqRel) {
+            return self
+                .reply(chat, "⏳ Ещё играет предыдущее голосовое.")
+                .await;
+        }
+        let status = self
+            .api
+            .send(chat, "🎙 Включаю голосовое…", None, true)
+            .await
+            .ok()
+            .map(|m| m.message_id);
+        let (file_id, seconds) = (voice.file_id.clone(), voice.duration);
+        let id = format!("v{chat}-{}", message.message_id);
+        let name = from
+            .first_name
+            .clone()
+            .or_else(|| from.username.clone())
+            .unwrap_or_else(|| user.to_string());
+        // Playing takes up to a minute: other updates go on meanwhile.
+        tokio::spawn(async move {
+            let result = self.play_voice(&file_id, &id, seconds).await;
+            self.voice_busy.store(false, Ordering::Release);
+            let text = match &result {
+                Ok(()) => format!("🔊 Голосовое проиграно ({seconds} с)."),
+                Err(e) => format!("⚠️ Голосовое: {}", view::esc(e)),
+            };
+            match status {
+                Some(id) => {
+                    if let Err(e) = self.api.edit(chat, id, &text, None).await {
+                        eprintln!("telegram: voice status in {chat}: {e}");
+                    }
+                }
+                None => self.reply(chat, &text).await,
+            }
+            if result.is_ok() && role == Role::Listener {
+                let note = format!(
+                    "🎙 {} включил(а) голосовое на колонке ({seconds} с).",
+                    view::esc(&name)
+                );
+                for &owner in &self.config.users {
+                    let _ = self.api.send(owner, &note, None, true).await;
+                }
+            }
+        });
+    }
+
+    /// Download, decode, hand to soundiya and wait until it has played. The files are gone
+    /// when this returns, whatever happened.
+    async fn play_voice(&self, file_id: &str, id: &str, seconds: u64) -> Result<(), String> {
+        let file = self
+            .api
+            .get_file(file_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let path = file.file_path.ok_or("Telegram не отдал файл")?;
+        let data = self
+            .api
+            .download(&path, voice::MAX_FILE as usize)
+            .await
+            .map_err(|e| e.to_string())?;
+        let files = voice::Files::new(id);
+        files.write_ogg(&data)?;
+        files.decode(&self.config.gst).await?;
+        let pcm = files.pcm.to_str().ok_or("bad path")?;
+        self.command("VOICE", pcm).await.map_err(|e| {
+            if e == "unknown command" {
+                "эта soundiya не умеет голосовые — обнови её через /updates".to_owned()
+            } else {
+                e
+            }
+        })?;
+        // soundiya has read and deleted the file; it reports `voice` until the message is over.
+        let deadline = Instant::now() + Duration::from_secs(seconds + 15);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        while Instant::now() < deadline {
+            match self.state().await {
+                Ok(state) if !state.voice => return Ok(()),
+                _ => tokio::time::sleep(Duration::from_millis(500)).await,
+            }
+        }
+        Ok(())
     }
 
     /// Starts something new; the card follows when the first track starts.

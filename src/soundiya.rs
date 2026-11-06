@@ -25,6 +25,9 @@ pub struct State {
     /// Percent; missing in soundiya builds before the volume step.
     #[serde(default)]
     pub volume: Option<u16>,
+    /// A voice message is playing; missing in builds before `VOICE`.
+    #[serde(default)]
+    pub voice: bool,
     pub queue: Vec<Entry>,
 }
 
