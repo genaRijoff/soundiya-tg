@@ -1006,19 +1006,18 @@ impl Bot {
             ("l", Some(id)) => admin::listener(&self.access.lock().unwrap(), mode, id),
             ("v", Some(id)) => {
                 let mut access = self.access.lock().unwrap();
-                match access.listeners.iter_mut().find(|l| l.id == id) {
-                    Some(l) => {
-                        l.voice = !l.voice;
-                        toast = if l.voice {
-                            "🎙 Голосовые разрешены"
-                        } else {
-                            "🎙 Голосовые запрещены"
-                        }
-                        .into();
-                        admin::listener(&access, mode, id)
+                admin::toggle_voice(&mut access, mode, id).and_then(|allowed| {
+                    toast = if allowed {
+                        "🎙 Голосовые разрешены"
+                    } else {
+                        "🎙 Голосовые запрещены"
                     }
-                    None => None,
-                }
+                    .to_owned();
+                    if mode != VoiceFrom::Owners {
+                        toast += " · режим: отмеченным";
+                    }
+                    admin::listener(&access, VoiceFrom::Owners, id)
+                })
             }
             ("n", Some(id)) => {
                 let mut access = self.access.lock().unwrap();

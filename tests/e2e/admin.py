@@ -43,6 +43,7 @@ script = [
     [cb(OWNER, "x:home")],
     [cb(OWNER, "x:vm")],                # owners -> all
     [cb(OWNER, "x:vv:+")],
+    [cb(OWNER, f"x:v:{KEEP}")],         # under «всем»: off for him, mode -> owners
     [cb(OWNER, "x:vv:x")],              # not a step: ignored
     [cb(OWNER, f"x:d:{DROP}")],
     [cb(OWNER, f"x:D:{DROP}")],
@@ -100,9 +101,11 @@ check(stopped, "the bot stops on SIGTERM (no deadlock)")
 check(st["MENU"] > 0, "/admin sends the menu")
 check(any("Слушатели" in e["text"] and f"x:l:{KEEP}" in json.dumps(e["reply_markup"]) for e in edits), "the list links to each listener")
 check(any("<b>Keep</b>" in e["text"] and f"x:v:{KEEP}" in json.dumps(e["reply_markup"]) for e in edits), "a listener's page has its switches")
-check(keep.get("voice") is True, "voice messages allowed for the listener")
+check(any("Голосовые разрешены" in t for t in toasts), "voice messages allowed for the listener")
+check(keep.get("voice") is not True and access.get("voice_from") == "owners"
+      and any("запрещены · режим: отмеченным" in t for t in toasts), "under «всем» the button turns him off and the mode to «отмеченным»")
 check(KEEP in access["muted"], "the listener's notifications muted")
-check(access.get("voice_from") == "all", "voice mode switched (owners -> all)")
+check(any("Голосовые: все слушатели" in t for t in toasts), "voice mode switched (owners -> all)")
 check(access.get("voice_volume") == 110, "voice volume +10")
 check(all(l["id"] != DROP for l in access["listeners"]), "the other listener removed after confirming")
 check(any("Забрать доступ у <b>Drop</b>" in e["text"] for e in edits), "removal asks first")

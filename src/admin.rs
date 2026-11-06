@@ -99,14 +99,34 @@ pub fn list(access: &Access, owners: &[i64], mode: VoiceFrom) -> (String, Value)
     (text, json!({"inline_keyboard": rows}))
 }
 
+/// The listener's voice button: flips what this listener may do now and keeps everyone else
+/// as they are. Under «всем» or «выкл» the marks are set to what they mean there and the mode
+/// becomes «отмеченным», where a mark is what counts. Returns the new state, or None if the
+/// listener is gone.
+pub fn toggle_voice(access: &mut Access, mode: VoiceFrom, id: i64) -> Option<bool> {
+    if !access.contains(id) {
+        return None;
+    }
+    if mode != VoiceFrom::Owners {
+        for l in &mut access.listeners {
+            l.voice = listener_voice(l, mode);
+        }
+        access.voice_from = Some(VoiceFrom::Owners);
+    }
+    let l = access.listeners.iter_mut().find(|l| l.id == id)?;
+    l.voice = !l.voice;
+    Some(l.voice)
+}
+
 pub fn listener(access: &Access, mode: VoiceFrom, id: i64) -> Option<(String, Value)> {
     let l = access.listeners.iter().find(|l| l.id == id)?;
     let muted = access.muted.contains(&id);
+    let allowed = listener_voice(l, mode);
     let voice_line = match mode {
-        VoiceFrom::All => "разрешены всем (режим «всем»)".to_owned(),
-        VoiceFrom::Off => "выключены для всех".to_owned(),
-        VoiceFrom::Owners if l.voice => "✅ разрешены".to_owned(),
-        VoiceFrom::Owners => "⛔ нельзя".to_owned(),
+        VoiceFrom::All => "✅ разрешены (сейчас всем)",
+        VoiceFrom::Off => "⛔ выключены для всех",
+        VoiceFrom::Owners if allowed => "✅ разрешены",
+        VoiceFrom::Owners => "⛔ нельзя",
     };
     let text = format!(
         "👤 <b>{}</b> — <code>{id}</code>\n\n\
@@ -122,7 +142,7 @@ pub fn listener(access: &Access, mode: VoiceFrom, id: i64) -> Option<(String, Va
     );
     let keyboard = json!({"inline_keyboard": [
         [button(
-            if l.voice { "🎙 Голосовые: ✅ разрешены" } else { "🎙 Голосовые: ⛔ нельзя" },
+            if allowed { "🎙 Голосовые: ✅ разрешены" } else { "🎙 Голосовые: ⛔ нельзя" },
             &format!("x:v:{id}"),
         )],
         [button(
@@ -219,6 +239,32 @@ mod tests {
 
         let (_, keyboard) = confirm_remove(&a, 77).unwrap();
         assert_eq!(datas(&keyboard), ["x:D:77", "x:l:77"]);
+    }
+
+    #[test]
+    fn the_listener_button_always_does_what_it_says() {
+        // «отмеченным»: only this listener's mark flips.
+        let mut a = access();
+        assert_eq!(toggle_voice(&mut a, VoiceFrom::Owners, 88), Some(true));
+        assert!(a.listeners.iter().all(|l| l.voice));
+        assert_eq!(a.voice_from, None);
+        // «всем»: everyone keeps voice except the one pressed; the mode becomes «отмеченным».
+        let mut a = access();
+        assert_eq!(toggle_voice(&mut a, VoiceFrom::All, 77), Some(false));
+        assert_eq!(a.voice_from, Some(VoiceFrom::Owners));
+        assert!(!a.listeners[0].voice && a.listeners[1].voice);
+        // «выкл»: nobody but the one pressed.
+        let mut a = access();
+        assert_eq!(toggle_voice(&mut a, VoiceFrom::Off, 88), Some(true));
+        assert_eq!(a.voice_from, Some(VoiceFrom::Owners));
+        assert!(!a.listeners[0].voice && a.listeners[1].voice);
+        // The page shows what is allowed now, not the stored mark.
+        let a = access();
+        let (_, keyboard) = listener(&a, VoiceFrom::All, 88).unwrap();
+        assert!(keyboard.to_string().contains("✅ разрешены"));
+        let mut a = access();
+        assert_eq!(toggle_voice(&mut a, VoiceFrom::All, 5), None);
+        assert_eq!(a.voice_from, None);
     }
 
     #[test]
