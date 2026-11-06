@@ -1,0 +1,21 @@
+[package]
+name = "soundiya-tg"
+version = "0.1.5"
+edition = "2024"
+license = "MIT"
+description = "Telegram remote for soundiya on Yandex Stations: now playing, queue, controls"
+publish = false
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros", "net", "time", "io-util", "signal", "sync", "process"] }
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = 0

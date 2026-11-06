@@ -1,0 +1,7 @@
+/target/
+/dist/*
+!/dist/.gitkeep
+config.json
+access.json
+updates.json
+*.log
