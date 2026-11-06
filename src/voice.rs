@@ -2,15 +2,16 @@
 //! turns it into raw PCM, and soundiya's `VOICE` plays that over the paused music.
 use std::{
     fs,
-    io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    io::{Read, Write},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
 };
 use tokio::process::Command;
 
-/// The folder soundiya takes voice files from (`VOICE_DIR` there); private to root.
+/// The folder soundiya takes voice files from (`VOICE_DIR` there). Root's files in it are
+/// private; `nobody` may only pass through to the work folder of the message being decoded.
 pub const DIR: &str = "/tmp/soundiya-tg-voice";
 pub const MAX_SECONDS: u64 = 60;
 /// The OGG file as Telegram sends it.
@@ -87,15 +88,41 @@ pub fn reset_dir() {
 }
 
 fn ensure_dir() -> std::io::Result<()> {
-    match fs::DirBuilder::new().mode(0o700).create(DIR) {
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        other => other,
+    match fs::DirBuilder::new().mode(0o711).create(DIR) {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        other => other?,
     }
+    // Searchable, not listable: `nobody` reaches only the work folder it is given.
+    fs::set_permissions(DIR, fs::Permissions::from_mode(0o711))
 }
 
-/// The two files of one message; both are deleted when this goes out of scope, whatever happens.
+/// The unprivileged user the decoder runs as, from /etc/passwd; None when this process is
+/// not root (tests, a manual run), so there is nothing to drop.
+fn nobody() -> Option<(u32, u32)> {
+    // /proc/self belongs to this process's user.
+    if fs::metadata("/proc/self").map_or(true, |m| m.uid() != 0) {
+        return None;
+    }
+    let passwd = fs::read_to_string("/etc/passwd").ok();
+    let entry = passwd.as_deref().and_then(|text| {
+        text.lines().find_map(|line| {
+            let mut fields = line.split(':');
+            (fields.next() == Some("nobody")).then(|| {
+                let _password = fields.next();
+                Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+            })?
+        })
+    });
+    Some(entry.unwrap_or((65534, 65534)))
+}
+
+/// The files of one message; all are deleted when this goes out of scope, whatever happens.
+/// `ogg` and the decoder's output live in `work`, a folder owned by the decoder's user;
+/// `pcm`, what soundiya gets, is root's.
 pub struct Files {
+    work: PathBuf,
     pub ogg: PathBuf,
+    decoded: PathBuf,
     pub pcm: PathBuf,
 }
 impl Files {
@@ -106,18 +133,30 @@ impl Files {
             .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
             .collect();
         let dir = Path::new(DIR);
+        let work = dir.join(format!("{id}.d"));
         Files {
-            ogg: dir.join(format!("{id}.oga")),
+            ogg: work.join("in.oga"),
+            decoded: work.join("out.pcm"),
             pcm: dir.join(format!("{id}.pcm")),
+            work,
         }
     }
 
     pub fn write_ogg(&self, data: &[u8]) -> Result<(), String> {
         ensure_dir().map_err(|e| format!("{DIR}: {e}"))?;
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&self.work)
+            .map_err(|e| format!("{}: {e}", self.work.display()))?;
+        if let Some((uid, gid)) = nobody() {
+            std::os::unix::fs::chown(&self.work, Some(uid), Some(gid))
+                .map_err(|e| format!("{}: {e}", self.work.display()))?;
+        }
+        // Readable for the decoder; nobody else gets into `work`.
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o600)
+            .mode(0o644)
             .open(&self.ogg)
             .map_err(|e| format!("{}: {e}", self.ogg.display()))?;
         file.write_all(data).map_err(|e| e.to_string())
@@ -145,21 +184,61 @@ impl Files {
         })
     }
 
-    /// OGG/Opus -> PCM with `maind --gst-launch`; the OGG is deleted right after.
+    /// OGG/Opus -> PCM with `maind --gst-launch`, run as `nobody`: a crafted file that breaks
+    /// the old GStreamer gets no root. The result is copied out of the work folder (checked,
+    /// see [`take_decoded`]) and the work folder with the OGG is deleted right after.
     pub async fn decode(&self, gst: &str) -> Result<(), String> {
-        let result = decode(gst, &self.ogg, &self.pcm).await;
-        let _ = fs::remove_file(&self.ogg);
+        let result = match decode(gst, &self.ogg, &self.decoded, nobody()).await {
+            Ok(()) => take_decoded(&self.decoded, &self.pcm),
+            Err(e) => Err(e),
+        };
+        let _ = fs::remove_dir_all(&self.work);
         result
     }
 }
 impl Drop for Files {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.ogg);
+        let _ = fs::remove_dir_all(&self.work);
         let _ = fs::remove_file(&self.pcm);
     }
 }
 
-async fn decode(gst: &str, ogg: &Path, pcm: &Path) -> Result<(), String> {
+/// Copies the decoder's output into root's file. The work folder belongs to the decoder's
+/// user, so its output is not trusted: it must be a plain file (no link to something of
+/// root's), the same one that was checked, and at most a minute long.
+fn take_decoded(from: &Path, to: &Path) -> Result<(), String> {
+    let checked = fs::symlink_metadata(from).map_err(|_| "нет результата раскодирования")?;
+    if !checked.file_type().is_file() {
+        return Err("результат раскодирования — не обычный файл".into());
+    }
+    let file = fs::File::open(from).map_err(|e| e.to_string())?;
+    let opened = file.metadata().map_err(|e| e.to_string())?;
+    if (opened.dev(), opened.ino()) != (checked.dev(), checked.ino()) {
+        return Err("результат раскодирования подменён".into());
+    }
+    if opened.len() > MAX_PCM {
+        return Err("голосовое длиннее 1 минуты".into());
+    }
+    let mut data = Vec::new();
+    file.take(MAX_PCM + 1)
+        .read_to_end(&mut data)
+        .map_err(|e| e.to_string())?;
+    if data.is_empty() {
+        return Err("не удалось раскодировать голосовое".into());
+    }
+    if data.len() as u64 > MAX_PCM {
+        return Err("голосовое длиннее 1 минуты".into());
+    }
+    let mut out = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(to)
+        .map_err(|e| format!("{}: {e}", to.display()))?;
+    out.write_all(&data).map_err(|e| e.to_string())
+}
+
+async fn decode(gst: &str, ogg: &Path, pcm: &Path, user: Option<(u32, u32)>) -> Result<(), String> {
     let source = format!("location={}", ogg.display());
     let sink = format!("location={}", pcm.display());
     let caps = format!("audio/x-raw,format=S16LE,rate={RATE},channels=1");
@@ -181,7 +260,12 @@ async fn decode(gst: &str, ogg: &Path, pcm: &Path) -> Result<(), String> {
         &sink,
     ];
     // No shell: every part is its own argument.
-    let mut child = Command::new(gst)
+    let mut command = Command::new(gst);
+    if let Some((uid, gid)) = user {
+        // Supplementary groups are dropped too when the uid changes from root.
+        command.uid(uid).gid(gid);
+    }
+    let mut child = command
         .env("LD_LIBRARY_PATH", GST_LIBS)
         .arg("--gst-launch")
         .args(pipeline)
@@ -195,7 +279,7 @@ async fn decode(gst: &str, ogg: &Path, pcm: &Path) -> Result<(), String> {
     // low-bitrate Opus would decode to tens of MB in the station's RAM. Watch the output and
     // stop at a minute's worth.
     let started = std::time::Instant::now();
-    let size = || fs::metadata(pcm).map_or(0, |m| m.len());
+    let size = || fs::symlink_metadata(pcm).map_or(0, |m| m.len());
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -325,7 +409,7 @@ mod tests {
             ),
         );
         let started = std::time::Instant::now();
-        let result = runtime().block_on(decode(&gst, &ogg, &pcm));
+        let result = runtime().block_on(decode(&gst, &ogg, &pcm, None));
         assert_eq!(result.unwrap_err(), "голосовое длиннее 1 минуты");
         assert!(started.elapsed() < Duration::from_secs(10));
         // Stopped soon after the limit, not long after.
@@ -339,10 +423,10 @@ mod tests {
             "ok",
             "head -c 64000 /dev/zero > \"$(echo \"$@\" | sed 's/.*location=//')\"",
         );
-        assert!(runtime().block_on(decode(&gst, &ogg, &pcm)).is_ok());
+        assert!(runtime().block_on(decode(&gst, &ogg, &pcm, None)).is_ok());
         assert_eq!(fs::metadata(&pcm).unwrap().len(), 64000);
         let (gst, ogg, pcm) = fake_gst("empty", "exit 0");
-        assert!(runtime().block_on(decode(&gst, &ogg, &pcm)).is_err());
+        assert!(runtime().block_on(decode(&gst, &ogg, &pcm, None)).is_err());
         for dir in ["ok", "empty"] {
             let _ = fs::remove_dir_all(std::env::temp_dir().join(format!(
                 "soundiya-tg-voice-test-{}-{dir}",
@@ -352,9 +436,41 @@ mod tests {
     }
 
     #[test]
+    fn the_decoders_output_is_taken_only_as_a_plain_file() {
+        let dir = std::env::temp_dir().join(format!("soundiya-tg-take-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let (from, to) = (dir.join("out.pcm"), dir.join("v.pcm"));
+        // A link to a secret is refused, and the secret is not copied.
+        let secret = dir.join("secret");
+        fs::write(&secret, b"root only").unwrap();
+        std::os::unix::fs::symlink(&secret, &from).unwrap();
+        assert!(
+            take_decoded(&from, &to)
+                .unwrap_err()
+                .contains("не обычный файл")
+        );
+        assert!(!to.exists());
+        fs::remove_file(&from).unwrap();
+        // Too long is refused; a normal one is copied, private to root.
+        fs::write(&from, vec![0u8; MAX_PCM as usize + 2]).unwrap();
+        assert!(take_decoded(&from, &to).unwrap_err().contains("1 минуты"));
+        fs::write(&from, [1u8, 2, 3, 4]).unwrap();
+        take_decoded(&from, &to).unwrap();
+        assert_eq!(fs::read(&to).unwrap(), [1, 2, 3, 4]);
+        assert_eq!(
+            fs::metadata(&to).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // The target is never overwritten (create_new): a planted file stops it.
+        assert!(take_decoded(&from, &to).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn file_names_keep_only_safe_characters() {
         let files = Files::new("v42-7/../x y");
-        assert_eq!(files.ogg, Path::new(DIR).join("v42-7xy.oga"));
+        assert_eq!(files.ogg, Path::new(DIR).join("v42-7xy.d/in.oga"));
         assert_eq!(files.pcm, Path::new(DIR).join("v42-7xy.pcm"));
     }
 }

@@ -29,13 +29,16 @@ open(TONE, "wb").write(b"".join(struct.pack("<h", int(1500 * math.sin(n * 440 * 
 # Stand-in for `maind --gst-launch ...`: checks the pipeline, then "decodes" to the tone.
 gst = os.path.join(WORK, "fake-gst.sh")
 open(gst, "w").write(f"""#!/bin/sh
-echo "$LD_LIBRARY_PATH $*" >> {WORK}/gst-args.txt
+echo "uid=$(id -u) $LD_LIBRARY_PATH $*" >> {WORK}/gst-args.txt
 src=""; dst=""
 for a in "$@"; do case "$a" in location=*.oga) src=${{a#location=}};; location=*.pcm) dst=${{a#location=}};; esac; done
 [ -f "$src" ] && [ -n "$dst" ] || exit 1
 cp {TONE} "$dst"
 """)
 os.chmod(gst, 0o755)
+# The decoder runs as nobody: it must be able to log its arguments and read the tone.
+open(os.path.join(WORK, "gst-args.txt"), "w").close(); os.chmod(os.path.join(WORK, "gst-args.txt"), 0o666)
+os.chmod(WORK, 0o755); os.chmod(TONE, 0o644)
 
 calls, received, lock = [], [], threading.Lock()
 player = {"state": "playing", "index": 1, "position": 3, "repeat": False, "sleep": None, "signed_in": True,
@@ -139,8 +142,9 @@ check(len(rms) == 2 and abs(rms[0] - 13500) < 400, f"quiet speech is leveled, ti
 check("voice: speech -30 dBFS -> -8 dBFS (gain x12.7, /voicevol 150 %)" in err, "the log shows the levels")
 check(json.load(open(os.path.join(WORK, "access.json"))).get("voice_volume") == 150
       and json.load(open(os.path.join(WORK, "access.json"))).get("voice_from") == "all", "/voicevol and /voice are saved")
-check(voice_seen.get("mode") == "0o700", "the voice folder is private")
-check("/system/vendor/quasar/libs --gst-launch filesrc" in gst_args and "! opusdec !" in gst_args
+check(voice_seen.get("mode") == "0o711", "the voice folder is not listable")
+check(gst_args.count("uid=65534 ") == 2 and "uid=0 " not in gst_args, "GStreamer runs as nobody, not root")
+check("/system/vendor/quasar/libs --gst-launch filesrc location=/tmp/soundiya-tg-voice/v42-10.d/in.oga" in gst_args and "! opusdec !" in gst_args
       and "audio/x-raw,format=S16LE,rate=16000,channels=1" in gst_args, "GStreamer decodes Opus to 16 kHz mono")
 check(any("Голосовое проиграно (2 с)" in t for _, t in texts), "the owner sees: played")
 check(any("Ещё играет предыдущее" in t for _, t in texts), "a second message meanwhile waits its turn")
