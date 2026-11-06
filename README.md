@@ -1,5 +1,15 @@
 # soundiya-tg
 
+> [!TIP]
+> **💰 Поддержать проект** — донат на любой из адресов:
+>
+> | Сеть | Адрес |
+> |---|---|
+> | 💵 USDT · TRC20 | `TN2rQAsGNHQr8wnneKRD14UMX629D2Ca5q` |
+> | 💵 USDT · ERC20 | `0x721845234eeC44e0a9BaE78402965828C1bc6c57` |
+> | 🔸 USDT · TON | `UQCwj-RY2a4BH7sIDDeLb77XRaPDq0mb1FVwyC4UaOGbLMYy` |
+> | 💎 TON | `UQCdQtJO4CF0Lyeb93X2zdeWeAcDJ-ieBC3AaL7LIqWfMBg3` |
+
 ![soundiya-tg](docs/banner.jpg)
 
 Telegram-пульт для [soundiya](https://github.com/ShadowBlade83/soundiya) (SoundCloud голосом Алисы) на рутованной **Яндекс Станции Мини 1** (YNDX-0004). Бот работает прямо на колонке и сам ходит в Telegram: **входящих портов нет**.
