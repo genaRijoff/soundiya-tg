@@ -1,6 +1,7 @@
 //! soundiya-tg: a Telegram remote for soundiya, running on the speaker next to it.
 //! It only connects out (long polling), so nothing listens on the network.
 mod access;
+mod admin;
 mod bot;
 mod config;
 mod soundiya;

@@ -1,6 +1,7 @@
 //! Telegram updates in, soundiya commands out; a watcher keeps the player cards current.
 use crate::{
     access::{self, Access, Role},
+    admin,
     config::{Config, VoiceFrom},
     soundiya::{self, State},
     telegram::{Api, CallbackQuery, Error, Message, Update, User},
@@ -390,11 +391,12 @@ impl Bot {
             }
             "users" => return self.send_users(chat).await,
             "notify" => return self.notify_command(chat, argument).await,
-            "voice" | "voicevol" if role != Role::Owner => {
+            "voice" | "voicevol" | "admin" if role != Role::Owner => {
                 return self.reply(chat, "Это может только владелец колонки.").await;
             }
             "voicevol" => return self.voicevol_command(chat, argument).await,
             "voice" => return self.voice_command(chat, argument).await,
+            "admin" => return self.send_admin(chat).await,
             "allow" => return self.allow_command(chat, argument).await,
             "deny" => return self.deny_command(chat, argument).await,
             "now" => return self.want_card(chat),
@@ -447,22 +449,26 @@ impl Bot {
             return;
         }
         let role = self.role(user);
-        let allowed = self
-            .access
-            .lock()
-            .unwrap()
-            .voice_from
-            .unwrap_or(self.config.voice);
-        match (role, allowed) {
+        let (mode, marked) = {
+            let access = self.access.lock().unwrap();
+            let mode = access.voice_from.unwrap_or(self.config.voice);
+            let marked = access
+                .listeners
+                .iter()
+                .find(|l| l.id == user)
+                .is_some_and(|l| admin::listener_voice(l, mode));
+            (mode, marked)
+        };
+        match (role, mode) {
             (Role::Stranger, _) => return self.stranger(from, chat).await,
             (_, VoiceFrom::Off) => {
                 return self.reply(chat, "🎙 Голосовые на колонку выключены.").await;
             }
-            (Role::Listener, VoiceFrom::Owners) => {
+            (Role::Listener, _) if !marked => {
                 return self
                     .reply(
                         chat,
-                        "🎙 Голосовые на колонку может отправлять только владелец.",
+                        "🎙 Голосовые на колонку тебе не разрешены — попроси владельца.",
                     )
                     .await;
             }
@@ -610,7 +616,7 @@ impl Bot {
         };
         let (chat, message_id) = (message.chat.id, message.message_id);
         let (kind, value) = data.split_once(':').unwrap_or((data, ""));
-        if matches!(kind, "u" | "a") && role != Role::Owner {
+        if matches!(kind, "u" | "a" | "x") && role != Role::Owner {
             return self.answer(&query, "⛔ Только владелец").await;
         }
         match kind {
@@ -738,6 +744,7 @@ impl Bot {
             }
             "u" => self.on_update_button(&query, chat, message_id, value).await,
             "a" => self.on_access_button(&query, chat, message_id, value).await,
+            "x" => self.on_admin_button(&query, chat, message_id, value).await,
             _ => self.answer(&query, "").await,
         }
     }
@@ -754,11 +761,7 @@ impl Bot {
     }
 
     async fn voice_command(&self, chat: i64, argument: &str) {
-        let describe = |from: VoiceFrom| match from {
-            VoiceFrom::Owners => "только владелец",
-            VoiceFrom::All => "владелец и слушатели (тебе приходит, кто прислал)",
-            VoiceFrom::Off => "никто, голосовые выключены",
-        };
+        let describe = admin::mode_text;
         let chosen = match argument.trim().to_lowercase().as_str() {
             "all" | "все" => VoiceFrom::All,
             "owners" | "owner" | "владелец" => VoiceFrom::Owners,
@@ -774,8 +777,8 @@ impl Bot {
                     .reply(
                         chat,
                         &format!(
-                            "🎙 Голосовые на колонку: {}.\n/voice all — и слушатели, \
-                             /voice owners — только владелец, /voice off — никто",
+                            "🎙 Голосовые на колонку: {}.\n/voice all — все слушатели, \
+                             /voice owners — отмеченные в /admin, /voice off — никто",
                             describe(now)
                         ),
                     )
@@ -942,6 +945,133 @@ impl Bot {
             .map(|l| serde_json::json!([{"text": format!("❌ {}", l.name), "callback_data": format!("a:d:{}", l.id)}]))
             .collect();
         (text, serde_json::json!({"inline_keyboard": rows}))
+    }
+
+    // ---- the owner's menu ----
+
+    fn voice_mode(&self) -> VoiceFrom {
+        self.access
+            .lock()
+            .unwrap()
+            .voice_from
+            .unwrap_or(self.config.voice)
+    }
+
+    async fn send_admin(&self, chat: i64) {
+        // The mode first: `voice_mode` takes the same lock.
+        let mode = self.voice_mode();
+        let (text, keyboard) = admin::home(&self.access.lock().unwrap(), mode);
+        if let Err(e) = self.api.send(chat, &text, Some(keyboard), true).await {
+            eprintln!("telegram: admin: {e}");
+        }
+    }
+
+    /// `x:` buttons; only owners get here. Every press is checked against the current list,
+    /// so a forged or stale button changes nothing it should not.
+    async fn on_admin_button(
+        &self,
+        query: &CallbackQuery,
+        chat: i64,
+        message_id: i64,
+        value: &str,
+    ) {
+        let (action, arg) = value.split_once(':').unwrap_or((value, ""));
+        let id = arg.parse::<i64>().ok();
+        let mode = self.voice_mode();
+        let mut toast = String::new();
+        let view = match (action, id) {
+            ("home", _) => Some(admin::home(&self.access.lock().unwrap(), mode)),
+            ("list", _) => Some(admin::list(
+                &self.access.lock().unwrap(),
+                &self.config.users,
+                mode,
+            )),
+            ("vm", _) => {
+                let next = admin::next_mode(mode);
+                self.access.lock().unwrap().voice_from = Some(next);
+                toast = format!("🎙 Голосовые: {}", admin::mode_text(next));
+                Some(admin::home(&self.access.lock().unwrap(), next))
+            }
+            ("vv", _) if matches!(arg, "+" | "-") => {
+                let mut access = self.access.lock().unwrap();
+                let level = admin::step_volume(access.voice_volume(), arg == "+");
+                access.voice_volume = Some(level);
+                toast = format!("🎙 {level} %");
+                Some(admin::home(&access, mode))
+            }
+            ("upd", _) => {
+                self.answer(query, "").await;
+                return self.updates_status(chat).await;
+            }
+            ("l", Some(id)) => admin::listener(&self.access.lock().unwrap(), mode, id),
+            ("v", Some(id)) => {
+                let mut access = self.access.lock().unwrap();
+                match access.listeners.iter_mut().find(|l| l.id == id) {
+                    Some(l) => {
+                        l.voice = !l.voice;
+                        toast = if l.voice {
+                            "🎙 Голосовые разрешены"
+                        } else {
+                            "🎙 Голосовые запрещены"
+                        }
+                        .into();
+                        admin::listener(&access, mode, id)
+                    }
+                    None => None,
+                }
+            }
+            ("n", Some(id)) => {
+                let mut access = self.access.lock().unwrap();
+                if access.contains(id) {
+                    let muted = !access.muted.contains(&id);
+                    access.set_muted(id, muted);
+                    toast = if muted {
+                        "🔕 Уведомления выключены"
+                    } else {
+                        "🔔 Уведомления включены"
+                    }
+                    .into();
+                }
+                admin::listener(&access, mode, id)
+            }
+            ("d", Some(id)) => admin::confirm_remove(&self.access.lock().unwrap(), id),
+            ("D", Some(id)) => match self.revoke(id).await {
+                Ok(name) => {
+                    toast = format!("Доступ закрыт: {name}");
+                    Some(admin::list(
+                        &self.access.lock().unwrap(),
+                        &self.config.users,
+                        mode,
+                    ))
+                }
+                Err(e) => {
+                    toast = format!("⚠️ {e}");
+                    Some(admin::list(
+                        &self.access.lock().unwrap(),
+                        &self.config.users,
+                        mode,
+                    ))
+                }
+            },
+            _ => None,
+        };
+        if matches!(action, "vm" | "vv" | "v" | "n")
+            && let Err(e) = self.save_access()
+        {
+            toast = format!("⚠️ {e}");
+        }
+        let Some((text, keyboard)) = view else {
+            // A listener removed meanwhile, or a forged button: back to the list.
+            self.answer(query, "Этого слушателя уже нет").await;
+            let (text, keyboard) =
+                admin::list(&self.access.lock().unwrap(), &self.config.users, mode);
+            let _ = self.api.edit(chat, message_id, &text, Some(keyboard)).await;
+            return;
+        };
+        self.answer(query, &toast).await;
+        if let Err(e) = self.api.edit(chat, message_id, &text, Some(keyboard)).await {
+            eprintln!("telegram: admin menu: {e}");
+        }
     }
 
     async fn send_users(&self, chat: i64) {

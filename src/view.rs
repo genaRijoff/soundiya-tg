@@ -41,7 +41,7 @@ fn bar(position: u64, duration: u64) -> String {
     line
 }
 
-fn button(text: &str, data: &str) -> Value {
+pub fn button(text: &str, data: &str) -> Value {
     json!({"text": text, "callback_data": data})
 }
 
@@ -207,6 +207,7 @@ pub const HELP: &str = "🎧 <b>soundiya</b> — пульт SoundCloud на ко
 /notify on|off — уведомления о новых треках";
 
 pub const OWNER_HELP: &str = "\n\n<b>Владельцу:</b>\n\
+/admin — управление: слушатели и их права, голосовые, обновления\n\
 /users — кто ещё управляет музыкой\n\
 /allow ID [имя], /deny ID — выдать или забрать доступ\n\
 /updates — новые версии soundiya\n\
@@ -227,10 +228,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("sleep", "Таймер сна, минуты"),
     ("vol", "Громкость: 50, +10, -10"),
     ("notify", "Уведомления о треках: on/off"),
-    ("users", "Доступ (владельцу)"),
+    ("admin", "⚙️ Управление (владельцу)"),
     ("updates", "Обновления (владельцу)"),
-    ("voicevol", "Громкость голосовых, % (владельцу)"),
-    ("voice", "Кто шлёт голосовые: all/owners/off (владельцу)"),
     ("help", "Помощь"),
 ];
 

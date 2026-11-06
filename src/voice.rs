@@ -21,6 +21,8 @@ const MAX_PCM: u64 = MAX_SECONDS * RATE as u64 * 2;
 pub const DEFAULT_GST: &str = "/system/vendor/quasar/maind";
 const GST_LIBS: &str = "/system/vendor/quasar/libs";
 const DECODE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How often the decoder's output size is checked; at most ~0.3 MB more gets written meanwhile.
+const WATCH_EVERY: Duration = Duration::from_millis(50);
 /// `/voicevol` range, percent of the automatic level.
 pub const VOLUME_MIN: u16 = 50;
 pub const VOLUME_MAX: u16 = 200;
@@ -177,10 +179,27 @@ async fn decode(gst: &str, ogg: &Path, pcm: &Path) -> Result<(), String> {
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("GStreamer: {e}"))?;
-    tokio::time::timeout(DECODE_TIMEOUT, child.wait())
-        .await
-        .map_err(|_| "GStreamer не ответил за 30 с".to_owned())?
-        .map_err(|e| format!("GStreamer: {e}"))?;
+    // The duration in the message comes from the sender's app and can be a lie: 2 MB of
+    // low-bitrate Opus would decode to tens of MB in the station's RAM. Watch the output and
+    // stop at a minute's worth.
+    let started = std::time::Instant::now();
+    let size = || fs::metadata(pcm).map_or(0, |m| m.len());
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {}
+            Err(e) => return Err(format!("GStreamer: {e}")),
+        }
+        if size() > MAX_PCM {
+            let _ = child.kill().await;
+            return Err("голосовое длиннее 1 минуты".into());
+        }
+        if started.elapsed() > DECODE_TIMEOUT {
+            let _ = child.kill().await;
+            return Err("GStreamer не ответил за 30 с".into());
+        }
+        tokio::time::sleep(WATCH_EVERY).await;
+    }
     // maind's exit code says little; the output does.
     match fs::metadata(pcm).map(|m| m.len()) {
         Ok(0) | Err(_) => Err("не удалось раскодировать голосовое".into()),
@@ -259,6 +278,65 @@ mod tests {
         // Outside 50-200 is held to the range.
         let (mut a, mut b) = (tone(1500.0, 1), tone(1500.0, 1));
         assert_eq!(level(&mut a, 500), level(&mut b, 200));
+    }
+
+    /// A stand-in decoder (`sh -c`) and its output file in a test folder.
+    fn fake_gst(name: &str, body: &str) -> (String, PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "soundiya-tg-voice-test-{}-{name}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("gst.sh");
+        fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let (ogg, pcm) = (dir.join("v.oga"), dir.join("v.pcm"));
+        fs::write(&ogg, b"OggS").unwrap();
+        (script.to_str().unwrap().to_owned(), ogg, pcm)
+    }
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_lying_duration_cannot_fill_the_ram() {
+        // Writes without end, as a long recording with a short claimed duration would.
+        let (gst, ogg, pcm) = fake_gst(
+            "endless",
+            &format!(
+                "while :; do head -c 65536 /dev/zero; done > {}",
+                "\"$(echo \"$@\" | sed 's/.*location=//')\""
+            ),
+        );
+        let started = std::time::Instant::now();
+        let result = runtime().block_on(decode(&gst, &ogg, &pcm));
+        assert_eq!(result.unwrap_err(), "голосовое длиннее 1 минуты");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        // Stopped soon after the limit, not long after.
+        assert!(fs::metadata(&pcm).unwrap().len() < MAX_PCM + (8 << 20));
+        let _ = fs::remove_dir_all(pcm.parent().unwrap());
+    }
+
+    #[test]
+    fn a_normal_message_decodes_and_an_empty_one_fails() {
+        let (gst, ogg, pcm) = fake_gst(
+            "ok",
+            "head -c 64000 /dev/zero > \"$(echo \"$@\" | sed 's/.*location=//')\"",
+        );
+        assert!(runtime().block_on(decode(&gst, &ogg, &pcm)).is_ok());
+        assert_eq!(fs::metadata(&pcm).unwrap().len(), 64000);
+        let (gst, ogg, pcm) = fake_gst("empty", "exit 0");
+        assert!(runtime().block_on(decode(&gst, &ogg, &pcm)).is_err());
+        for dir in ["ok", "empty"] {
+            let _ = fs::remove_dir_all(std::env::temp_dir().join(format!(
+                "soundiya-tg-voice-test-{}-{dir}",
+                std::process::id()
+            )));
+        }
     }
 
     #[test]

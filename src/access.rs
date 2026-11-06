@@ -7,6 +7,9 @@ use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 pub struct Listener {
     pub id: i64,
     pub name: String,
+    /// May send voice messages while only owners and marked listeners may (`/admin`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub voice: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,7 +68,11 @@ impl Access {
         let name = clean_name(name, id);
         match self.listeners.iter_mut().find(|l| l.id == id) {
             Some(l) => l.name = name,
-            None => self.listeners.push(Listener { id, name }),
+            None => self.listeners.push(Listener {
+                id,
+                name,
+                voice: false,
+            }),
         }
         true
     }
@@ -112,7 +119,8 @@ mod tests {
             access.listeners,
             vec![Listener {
                 id: 7,
-                name: "Василий <b>".into()
+                name: "Василий <b>".into(),
+                voice: false,
             }]
         );
         assert!(access.contains(7));
