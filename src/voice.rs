@@ -21,6 +21,47 @@ const MAX_PCM: u64 = MAX_SECONDS * RATE as u64 * 2;
 pub const DEFAULT_GST: &str = "/system/vendor/quasar/maind";
 const GST_LIBS: &str = "/system/vendor/quasar/libs";
 const DECODE_TIMEOUT: Duration = Duration::from_secs(30);
+/// `/voicevol` range, percent of the automatic level.
+pub const VOLUME_MIN: u16 = 50;
+pub const VOLUME_MAX: u16 = 200;
+/// Speech is brought to this RMS (about -16 dBFS), measured only where there is sound.
+const TARGET_RMS: f64 = 5000.0;
+/// ...but a near-silent recording is not raised more than this (it would be all noise).
+const MAX_BOOST: f64 = 8.0;
+/// 20 ms windows quieter than this (about -50 dBFS) are pauses and do not count.
+const GATE_RMS: f64 = 100.0;
+/// Above this share of full scale peaks are rounded off smoothly instead of clipping.
+const KNEE: f64 = 0.7;
+
+/// Brings speech to one loudness, times `percent` / 100, without hard clipping.
+/// Returns the gain applied.
+pub fn level(samples: &mut [i16], percent: u16) -> f64 {
+    let window = RATE as usize / 50;
+    let (mut power, mut windows) = (0.0, 0u32);
+    for chunk in samples.chunks(window) {
+        let mean = chunk.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>() / chunk.len() as f64;
+        if mean.sqrt() > GATE_RMS {
+            power += mean;
+            windows += 1;
+        }
+    }
+    let auto = if windows == 0 {
+        1.0
+    } else {
+        (TARGET_RMS / (power / f64::from(windows)).sqrt()).min(MAX_BOOST)
+    };
+    let gain = auto * f64::from(percent.clamp(VOLUME_MIN, VOLUME_MAX)) / 100.0;
+    for sample in samples.iter_mut() {
+        let x = f64::from(*sample) * gain / 32768.0;
+        let y = if x.abs() > KNEE {
+            x.signum() * (KNEE + (1.0 - KNEE) * ((x.abs() - KNEE) / (1.0 - KNEE)).tanh())
+        } else {
+            x
+        };
+        *sample = (y * 32767.0).round().clamp(-32768.0, 32767.0) as i16;
+    }
+    gain
+}
 
 /// Refuses a message before it is downloaded, from what Telegram says about it.
 pub fn limits(seconds: u64, size: Option<u64>) -> Result<(), &'static str> {
@@ -76,6 +117,18 @@ impl Files {
             .open(&self.ogg)
             .map_err(|e| format!("{}: {e}", self.ogg.display()))?;
         file.write_all(data).map_err(|e| e.to_string())
+    }
+
+    /// Applies [`level`] to the decoded file in place.
+    pub fn level(&self, percent: u16) -> Result<(), String> {
+        let bytes = fs::read(&self.pcm).map_err(|e| e.to_string())?;
+        let mut samples: Vec<i16> = bytes
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        level(&mut samples, percent);
+        let out: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        fs::write(&self.pcm, out).map_err(|e| e.to_string())
     }
 
     /// OGG/Opus -> PCM with `maind --gst-launch`; the OGG is deleted right after.
@@ -146,6 +199,66 @@ mod tests {
         assert!(limits(5, None).is_ok());
         assert!(limits(61, Some(10)).unwrap_err().contains("1 минуты"));
         assert!(limits(5, Some(MAX_FILE + 1)).unwrap_err().contains("2 МБ"));
+    }
+
+    fn tone(amplitude: f64, seconds: usize) -> Vec<i16> {
+        (0..RATE as usize * seconds)
+            .map(|n| {
+                (amplitude * (n as f64 * 440.0 * std::f64::consts::TAU / 16_000.0).sin()) as i16
+            })
+            .collect()
+    }
+    fn rms(samples: &[i16]) -> f64 {
+        (samples.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>() / samples.len() as f64).sqrt()
+    }
+
+    #[test]
+    fn quiet_and_loud_speech_end_up_alike() {
+        let mut quiet = tone(1500.0, 1);
+        let mut loud = tone(20_000.0, 1);
+        level(&mut quiet, 100);
+        level(&mut loud, 100);
+        assert!((rms(&quiet) - TARGET_RMS).abs() < 200.0, "{}", rms(&quiet));
+        assert!((rms(&loud) - TARGET_RMS).abs() < 200.0, "{}", rms(&loud));
+    }
+
+    #[test]
+    fn pauses_do_not_count_and_near_silence_is_not_blown_up() {
+        // Half a second of speech, then a second of silence: leveled as the speech alone.
+        let mut speech = tone(1500.0, 1)[..8000].to_vec();
+        speech.extend(std::iter::repeat_n(0, 16_000));
+        level(&mut speech, 100);
+        assert!((rms(&speech[..8000]) - TARGET_RMS).abs() < 200.0);
+        assert!(speech[8000..].iter().all(|&s| s == 0));
+        // A faint hiss is raised at most MAX_BOOST times.
+        let mut hiss = tone(400.0, 1);
+        let before = rms(&hiss);
+        assert_eq!(level(&mut hiss, 100), MAX_BOOST);
+        assert!((rms(&hiss) / before - MAX_BOOST).abs() < 0.05);
+        let mut silence = vec![0i16; 1000];
+        assert_eq!(level(&mut silence, 150), 1.5);
+        assert!(silence.iter().all(|&s| s == 0));
+    }
+
+    #[test]
+    fn the_owner_level_scales_and_peaks_never_clip() {
+        let mut normal = tone(1500.0, 1);
+        let mut double = tone(1500.0, 1);
+        let g1 = level(&mut normal, 100);
+        let g2 = level(&mut double, 200);
+        assert!((g2 / g1 - 2.0).abs() < 1e-9);
+        // Speech has sharp peaks: at 200 % they pass the knee and are rounded off, never wrapped.
+        let mut spiky = tone(1000.0, 1);
+        for s in spiky.iter_mut().step_by(100) {
+            *s = 30_000;
+        }
+        level(&mut spiky, 200);
+        let knee = (KNEE * 32767.0) as i16;
+        assert!(spiky.iter().step_by(100).all(|&s| s > knee));
+        assert!(spiky.iter().all(|&s| s > -32767));
+        // Outside 50-200 is held to the range.
+        let (mut a, mut b) = (tone(1500.0, 1), tone(1500.0, 1));
+        assert_eq!(level(&mut a, 500), level(&mut b, 200));
     }
 
     #[test]

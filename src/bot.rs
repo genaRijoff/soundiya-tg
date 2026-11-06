@@ -390,6 +390,11 @@ impl Bot {
             }
             "users" => return self.send_users(chat).await,
             "notify" => return self.notify_command(chat, argument).await,
+            "voice" | "voicevol" if role != Role::Owner => {
+                return self.reply(chat, "Это может только владелец колонки.").await;
+            }
+            "voicevol" => return self.voicevol_command(chat, argument).await,
+            "voice" => return self.voice_command(chat, argument).await,
             "allow" => return self.allow_command(chat, argument).await,
             "deny" => return self.deny_command(chat, argument).await,
             "now" => return self.want_card(chat),
@@ -442,7 +447,13 @@ impl Bot {
             return;
         }
         let role = self.role(user);
-        match (role, self.config.voice) {
+        let allowed = self
+            .access
+            .lock()
+            .unwrap()
+            .voice_from
+            .unwrap_or(self.config.voice);
+        match (role, allowed) {
             (Role::Stranger, _) => return self.stranger(from, chat).await,
             (_, VoiceFrom::Off) => {
                 return self.reply(chat, "🎙 Голосовые на колонку выключены.").await;
@@ -523,6 +534,8 @@ impl Bot {
         let files = voice::Files::new(id);
         files.write_ogg(&data)?;
         files.decode(&self.config.gst).await?;
+        let percent = self.access.lock().unwrap().voice_volume();
+        files.level(percent)?;
         let pcm = files.pcm.to_str().ok_or("bad path")?;
         self.command("VOICE", pcm).await.map_err(|e| {
             if e == "unknown command" {
@@ -738,6 +751,77 @@ impl Bot {
             at: Instant::now(),
             loads,
         });
+    }
+
+    async fn voice_command(&self, chat: i64, argument: &str) {
+        let describe = |from: VoiceFrom| match from {
+            VoiceFrom::Owners => "только владелец",
+            VoiceFrom::All => "владелец и слушатели (тебе приходит, кто прислал)",
+            VoiceFrom::Off => "никто, голосовые выключены",
+        };
+        let chosen = match argument.trim().to_lowercase().as_str() {
+            "all" | "все" => VoiceFrom::All,
+            "owners" | "owner" | "владелец" => VoiceFrom::Owners,
+            "off" | "выкл" => VoiceFrom::Off,
+            _ => {
+                let now = self
+                    .access
+                    .lock()
+                    .unwrap()
+                    .voice_from
+                    .unwrap_or(self.config.voice);
+                return self
+                    .reply(
+                        chat,
+                        &format!(
+                            "🎙 Голосовые на колонку: {}.\n/voice all — и слушатели, \
+                             /voice owners — только владелец, /voice off — никто",
+                            describe(now)
+                        ),
+                    )
+                    .await;
+            }
+        };
+        self.access.lock().unwrap().voice_from = Some(chosen);
+        if let Err(e) = self.save_access() {
+            return self.reply(chat, &format!("⚠️ {}", view::esc(&e))).await;
+        }
+        self.reply(
+            chat,
+            &format!("🎙 Голосовые на колонку: {}.", describe(chosen)),
+        )
+        .await;
+    }
+
+    async fn voicevol_command(&self, chat: i64, argument: &str) {
+        let (min, max) = (voice::VOLUME_MIN, voice::VOLUME_MAX);
+        let Ok(percent) = argument.trim().trim_end_matches('%').parse::<u16>() else {
+            let now = self.access.lock().unwrap().voice_volume();
+            return self
+                .reply(
+                    chat,
+                    &format!(
+                        "🎙 Громкость голосовых: {now} %.\n\
+                         Голосовые сами выравниваются до одного уровня, а это поправка к нему.\n\
+                         /voicevol {min}…{max}, например /voicevol 150"
+                    ),
+                )
+                .await;
+        };
+        if !(min..=max).contains(&percent) {
+            return self
+                .reply(
+                    chat,
+                    &format!("⚠️ От {min} до {max} %, например /voicevol 150"),
+                )
+                .await;
+        }
+        self.access.lock().unwrap().voice_volume = Some(percent);
+        if let Err(e) = self.save_access() {
+            return self.reply(chat, &format!("⚠️ {}", view::esc(&e))).await;
+        }
+        self.reply(chat, &format!("🎙 Громкость голосовых: {percent} %."))
+            .await;
     }
 
     async fn notify_command(&self, chat: i64, argument: &str) {

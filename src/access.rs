@@ -16,6 +16,12 @@ pub struct Access {
     /// Owners and listeners who turned off new-track notifications (`/notify off`).
     #[serde(default)]
     pub muted: Vec<i64>,
+    /// Voice message loudness after the automatic leveling, percent (`/voicevol`); 100 if unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_volume: Option<u16>,
+    /// Who may send voice messages, set from the chat (`/voice`); config.json's `voice` if unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_from: Option<crate::config::VoiceFrom>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +47,10 @@ impl Access {
         fs::write(&tmp, text).map_err(|e| e.to_string())?;
         fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
         fs::rename(&tmp, path).map_err(|e| e.to_string())
+    }
+
+    pub fn voice_volume(&self) -> u16 {
+        self.voice_volume.unwrap_or(100)
     }
 
     pub fn contains(&self, id: i64) -> bool {

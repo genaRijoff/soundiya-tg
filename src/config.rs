@@ -6,7 +6,7 @@ pub const DEFAULT_PATH: &str = "/data/opt/soundiya-tg/config.json";
 const DEFAULT_API: &str = "https://api.telegram.org";
 
 /// Who may send voice messages to the speaker.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum VoiceFrom {
     #[default]
