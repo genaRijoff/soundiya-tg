@@ -83,6 +83,8 @@ struct Action {
 
 /// Who gets the new-track card with a sound (`loud`) and who gets it silently (`quiet`).
 /// `lead` started the queue from the bot (None: by voice); `actor` just switched the track.
+/// `/notify off` drops the cards for tracks someone else started; the one who just searched
+/// or switched still gets the card, silently, so the controls are at hand.
 fn recipients(
     owners: &[i64],
     lead: Option<i64>,
@@ -103,7 +105,11 @@ fn recipients(
             .filter(|u| !muted.contains(u))
             .collect::<Vec<_>>()
     };
-    (audible(loud), audible(quiet))
+    let mut quiet = audible(quiet);
+    if let Some(a) = actor.filter(|a| muted.contains(a)) {
+        quiet.push(a);
+    }
+    (audible(loud), quiet)
 }
 
 /// Tells one queue from another: a new one means a new search, playlist or chart.
@@ -1512,7 +1518,13 @@ mod tests {
             recipients(&[1], Some(9), Some(1), &[]),
             (vec![9, 1], vec![])
         );
-        // /notify off wins everywhere.
+        // /notify off: no card for tracks others started...
         assert_eq!(recipients(&[1], Some(9), None, &[1, 9]), (vec![], vec![]));
+        // ...but the one who just searched or switched gets it, silently.
+        assert_eq!(recipients(&[1], Some(1), Some(1), &[1]), (vec![], vec![1]));
+        assert_eq!(
+            recipients(&[1], Some(9), Some(9), &[9]),
+            (vec![], vec![1, 9])
+        );
     }
 }

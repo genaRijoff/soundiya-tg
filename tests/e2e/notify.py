@@ -22,7 +22,8 @@ def soundiya():
         if cmd != "STATE": received.append(line)
         if cmd == "NEXT": player["index"] = min(player["index"] + 1, 5)
         if cmd == "PLAY":
-            player["queue"] = [{"id": 100 + i, "artist": "B", "title": f"P{i}", "duration": 100} for i in range(1, 6)]; player["index"] = 1
+            q = line.split(" ", 1)[1] if " " in line else ""; base = 300 if q == "muse" else 100
+            player["queue"] = [{"id": base + i, "artist": "B", "title": f"P{i} {q}", "duration": 100} for i in range(1, 6)]; player["index"] = 1
         c.sendall(("OK " + json.dumps(player) if cmd == "STATE" else "OK sent").encode() + b"\n"); c.close()
 
 def user(uid): return {"id": uid, "is_bot": False, "first_name": "Друг" if uid == FRIEND else "Я", "username": "friend" if uid == FRIEND else None}
@@ -35,6 +36,8 @@ script = [
     [msg(FRIEND, "rammstein")],
     [], [], [],
     [msg(FRIEND, "/notify off")],
+    [], [], [], [], [], [], [], [], [], [], [], [], [], [],
+    [msg(FRIEND, "muse")],              # muted, but searched himself
     [], [],
 ]
 st = {"n": 0, "id": 1, "REQ": None, "USERS": None, "UPD": None}
@@ -90,7 +93,7 @@ def voice():
     player["queue"] = [{"id": 200 + i, "artist": "C", "title": f"V{i}", "duration": 100} for i in range(1, 6)]; player["index"] = 1
 threading.Thread(target=voice, daemon=True).start()
 p = subprocess.Popen([BIN, "run", "--config", cfg, "--socket", SOCK], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-time.sleep(20); p.terminate(); out, err = p.communicate(timeout=10)
+time.sleep(26); p.terminate(); out, err = p.communicate(timeout=10)
 
 fails = []
 def check(c, w): print(("ok   " if c else "FAIL ") + w); c or fails.append(w)
@@ -104,5 +107,7 @@ voice_cards = [c for c in cards if "V1" in c[2]]
 check((OWNER, False) in [(u, s) for u, s, _ in voice_cards], "voice queue: owner gets the card with sound")
 check(all(u != FRIEND for u, _, _ in voice_cards), "voice queue: muted friend gets nothing")
 check(99 in json.load(open(os.path.join(WORK, "access.json")))["muted"], "/notify off saved")
+check((FRIEND, True) in [(u, s) for u, s, t in cards if "muse" in t], "muted, his own search still brings the card, silently")
+check((FRIEND, False) not in [(u, s) for u, s, t in cards if "muse" in t], "...and does not ring")
 print("--- log"); print(err.strip())
 print("all passed" if not fails else f"{len(fails)} failed"); sys.exit(1 if fails else 0)
