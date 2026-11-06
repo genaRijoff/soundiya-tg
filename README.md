@@ -1,5 +1,7 @@
 # soundiya-tg
 
+![soundiya-tg](docs/banner.jpg)
+
 Telegram-пульт для [soundiya](https://github.com/ShadowBlade83/soundiya) (SoundCloud голосом Алисы) на рутованной **Яндекс Станции Мини 1** (YNDX-0004). Бот работает прямо на колонке и сам ходит в Telegram: **входящих портов нет**.
 
 - Карточка «что играет»: трек, прогресс, громкость, таймер сна; кнопки ⏮ ⏯ ⏭, ±15 с, 🔉/🔊 ±10, 🔁, 😴
@@ -7,14 +9,16 @@ Telegram-пульт для [soundiya](https://github.com/ShadowBlade83/soundiya)
 - Название или ссылка soundcloud.com — найдёт и включит
 - Владелец и слушатели: друг пишет боту — тебе приходит запрос ✅/⛔
 - Карточку со звуком получает тот, кто включил; `/notify on|off` у каждого свой
-- Новые версии soundiya: бот сообщает, есть ли в них `STATE`, и ставит по кнопке
+- Обновления soundiya: [форк](https://github.com/genaRijoff/soundiya/releases) сам собирает каждую новую версию автора с `STATE`, бот сообщает и ставит по кнопке
 
+<details><summary>Скриншоты</summary>
 <p align="center">
   <img src="docs/bot-card.jpg" height="440" alt="Карточка «что играет»">
   <img src="docs/bot-menu.jpg" height="440" alt="Меню команд">
 </p>
+</details>
 
-> Нужна soundiya с командами `STATE`/`JUMP` — ветка [`bot-api`](https://github.com/genaRijoff/soundiya/tree/bot-api) форка. Скрипт сборки соберёт её сам.
+> Нужна soundiya с командами `STATE`/`JUMP` — из [релизов форка](https://github.com/genaRijoff/soundiya/releases) (`v…-bot`): каждые 6 часов GitHub Actions переносит наши патчи ([`bot-api`](https://github.com/genaRijoff/soundiya/tree/bot-api)) на новую версию автора, гоняет тесты и выпускает релиз. Скрипт сборки берёт последний такой релиз.
 
 ## Что нужно
 
@@ -38,7 +42,7 @@ git clone https://github.com/genaRijoff/soundiya-tg.git
 cd soundiya-tg
 wsl -d Debian -- bash scripts/build.sh
 ```
-В `dist\` появятся `soundiya-mini1-bot-*.tar.gz` и `soundiya-tg-armv7-*.tar.gz`.
+В `dist\` появятся `soundiya-mini1-bot-*.tar.gz` и `soundiya-tg-armv7-*.tar.gz`. Готовый `soundiya-mini1-bot-*.tar.gz` можно и просто скачать из релизов форка в `dist\`.
 
 ## Установка
 
@@ -46,7 +50,7 @@ wsl -d Debian -- bash scripts/build.sh
 powershell -ExecutionPolicy Bypass -File .\windows\install-soundiya-build.ps1   # soundiya с STATE/JUMP
 powershell -ExecutionPolicy Bypass -File .\windows\install-soundiya-tg.ps1      # бот
 ```
-- Первый скрипт ставит soundiya и **выключает её автообновление**, иначе оно вернёт официальную версию без `STATE`.
+- Первый скрипт ставит soundiya и **выключает её автообновление**, иначе оно вернёт версию автора без `STATE`. Дальше обновления ставит бот: `/updates` или сообщение о новом релизе → **⬇️ Установить**. Файлы проверяет штатный автообновлятор колонки (SHA256, гудок, откат при сбое); вернуть прежнюю сборку — кнопкой.
 - Второй при первой установке спросит токен (ввод скрыт, токен не покидает колонку) и твой id. Потом открой бота в Telegram и нажми **Start**.
 - Без SSH, по USB: `install-soundiya-build.ps1 -Adb`.
 
@@ -90,7 +94,8 @@ powershell -ExecutionPolicy Bypass -File .\windows\install-soundiya-build.ps1 -R
 | `users` | — | id владельцев |
 | `notify` | `true` | новый трек со звуком |
 | `updates` | `true` | проверять GitHub раз в 6 ч |
-| `github_repo` | `ShadowBlade83/soundiya` | чьи релизы проверять |
+| `github_repo` | `genaRijoff/soundiya` | чьи релизы проверять и ставить |
+| `issue_repo` | `ShadowBlade83/soundiya` | где `watch_issue` |
 | `watch_issue` | `0` | номер issue, о котором сообщать (0 — выкл.) |
 
 Слушатели и `/notify` хранятся в `access.json`, проверка обновлений — в `updates.json` (рядом, права 600). После правки: `/etc/init.d/S99soundiya-tg restart`.
@@ -107,7 +112,7 @@ powershell -ExecutionPolicy Bypass -File .\windows\install-soundiya-build.ps1 -R
 
 ```bash
 cargo test                                     # модульные
-cargo build && mkdir -p /tmp/e2e && python3 tests/e2e/roles.py target/debug/soundiya-tg /tmp/e2e   # сквозные (подставные Telegram и soundiya)
+cargo build && mkdir -p /tmp/e2e && for t in basic roles notify outage update; do python3 tests/e2e/$t.py target/debug/soundiya-tg /tmp/e2e || break; done   # сквозные (подставные Telegram, GitHub и soundiya)
 ```
 
 ## Лицензия

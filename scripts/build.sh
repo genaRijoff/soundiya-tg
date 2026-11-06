@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds two packages for Yandex Station Mini 1 into dist/ (WSL Debian or any Debian/Ubuntu x86_64):
-#   soundiya-mini1-bot-<date>.tar.gz  soundiya with STATE/JUMP (branch bot-api of the fork)
+#   soundiya-mini1-bot-<date>.tar.gz  soundiya with STATE/JUMP (the fork's latest *-bot release,
+#                                     or its branch bot-api before the first release)
 #   soundiya-tg-armv7-<date>.tar.gz   this bot
 # Usage: bash scripts/build.sh            (from the repository root)
 # Override the soundiya source: SOUNDIYA_REPO=... SOUNDIYA_REF=... bash scripts/build.sh
@@ -10,6 +11,11 @@ trap 'echo "[error] line $LINENO: $BASH_COMMAND" >&2' ERR
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 readonly ROOT
 readonly SOUNDIYA_REPO=${SOUNDIYA_REPO:-https://github.com/genaRijoff/soundiya.git}
+latest_bot_release() {
+    { git ls-remote --tags --refs "$SOUNDIYA_REPO" 'v*-bot*' 2>/dev/null || true; } \
+        | sed 's#.*refs/tags/##' | sort -V | tail -n 1
+}
+SOUNDIYA_REF=${SOUNDIYA_REF:-$(latest_bot_release)}
 readonly SOUNDIYA_REF=${SOUNDIYA_REF:-bot-api}
 readonly WORK="${HOME}/.cache/soundiya-tg-build"
 readonly OUT="$ROOT/dist"

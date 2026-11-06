@@ -1,8 +1,11 @@
 {
   "token": "123456789:replace-with-the-token-from-BotFather",
-  "users": [111111111],
+  "users": [
+    111111111
+  ],
   "notify": true,
   "updates": true,
-  "github_repo": "ShadowBlade83/soundiya",
+  "github_repo": "genaRijoff/soundiya",
+  "issue_repo": "ShadowBlade83/soundiya",
   "watch_issue": 0
 }

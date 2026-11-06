@@ -1,15 +1,34 @@
 //! New soundiya releases and news on the watched issue, from GitHub.
 //!
-//! Only reads public data; installing is done by the station's own autoupdater script, and only
-//! when a listed user presses the button.
+//! Only reads public data. Installing happens only when an owner presses the button: the bot
+//! downloads the release files and hands them to the station's own autoupdater script, which
+//! checks the checksums, keeps the current build and rolls back by itself.
+use crate::config::Config;
 use serde::{Deserialize, Serialize};
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, time::Duration};
+use std::{
+    fs,
+    os::unix::fs::{DirBuilderExt, PermissionsExt},
+    path::Path,
+    time::Duration,
+};
 
 pub const AUTOUPDATE: &str = "/data/opt/soundiya-autoupdate/soundiya-autoupdate.sh";
-pub const AUTOUPDATE_DIR: &str = "/data/opt/soundiya-autoupdate";
 const APP: &str = "/data/opt/soundiya";
 /// GitHub answers here are a few KB; anything bigger is refused.
 const MAX_BODY: usize = 1 << 20;
+/// A release file (the soundiya binary is a few MB).
+const MAX_FILE: usize = 32 << 20;
+/// The files of a soundiya release, as the autoupdater expects them.
+const RELEASE_FILES: [&str; 7] = [
+    "SHA256SUMS",
+    "soundiya",
+    "install.sh",
+    "run.sh",
+    "start.sh",
+    "stop.sh",
+    "S99soundiya",
+];
+const DOWNLOAD_DIR: &str = "/tmp/soundiya-tg-update";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Release {
@@ -102,7 +121,9 @@ pub struct GitHub {
     http: reqwest::Client,
     api: String,
     raw: String,
+    download: String,
     repo: String,
+    issue_repo: String,
 }
 
 #[derive(Deserialize)]
@@ -112,32 +133,51 @@ struct LatestRelease {
 }
 
 impl GitHub {
-    pub fn new(api: &str, raw: &str, repo: &str) -> Result<Self, String> {
+    pub fn new(config: &Config) -> Result<Self, String> {
+        let trim = |url: &str| url.trim_end_matches('/').to_owned();
         let http = reqwest::Client::builder()
             .user_agent(concat!("soundiya-tg/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
+            // Release downloads redirect to GitHub's file storage: never down to plain HTTP.
+            // Only tests point the endpoints at http://127.0.0.1.
+            .https_only(
+                [
+                    &config.github_api,
+                    &config.github_raw,
+                    &config.github_download,
+                ]
+                .iter()
+                .all(|url| url.starts_with("https://")),
+            )
             .build()
             .map_err(|e| e.without_url().to_string())?;
         Ok(GitHub {
             http,
-            api: api.trim_end_matches('/').to_owned(),
-            raw: raw.trim_end_matches('/').to_owned(),
-            repo: repo.to_owned(),
+            api: trim(&config.github_api),
+            raw: trim(&config.github_raw),
+            download: trim(&config.github_download),
+            repo: config.github_repo.clone(),
+            issue_repo: config.issue_repo.clone(),
         })
     }
 
-    async fn get(&self, url: &str) -> Result<String, String> {
+    async fn fetch(&self, url: &str, limit: usize, wait: Duration) -> Result<Vec<u8>, String> {
         let response = self
             .http
             .get(url)
+            .timeout(wait)
             .send()
             .await
             .map_err(|e| e.without_url().to_string())?;
         if !response.status().is_success() {
             return Err(format!("GitHub {}", response.status()));
         }
-        let body = crate::telegram::read_limited(response, MAX_BODY).await?;
+        crate::telegram::read_limited(response, limit).await
+    }
+
+    async fn get(&self, url: &str) -> Result<String, String> {
+        let body = self.fetch(url, MAX_BODY, Duration::from_secs(30)).await?;
         String::from_utf8(body).map_err(|_| "GitHub: not UTF-8".to_owned())
     }
 
@@ -146,11 +186,7 @@ impl GitHub {
             .get(&format!("{}/repos/{}/releases/latest", self.api, self.repo))
             .await?;
         let latest: LatestRelease = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-        if !latest
-            .tag_name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
-        {
+        if !valid_tag(&latest.tag_name) {
             return Err("unexpected release tag".into());
         }
         // The tag's source tells whether the bot keeps working after the update.
@@ -169,10 +205,78 @@ impl GitHub {
 
     pub async fn issue(&self, number: u64) -> Result<Issue, String> {
         let text = self
-            .get(&format!("{}/repos/{}/issues/{number}", self.api, self.repo))
+            .get(&format!(
+                "{}/repos/{}/issues/{number}",
+                self.api, self.issue_repo
+            ))
             .await?;
         serde_json::from_str(&text).map_err(|e| e.to_string())
     }
+
+    /// Saves the files of release `tag` into `dir`.
+    async fn download(&self, tag: &str, dir: &Path) -> Result<(), String> {
+        for name in RELEASE_FILES {
+            let url = format!(
+                "{}/{}/releases/download/{tag}/{name}",
+                self.download, self.repo
+            );
+            let body = self
+                .fetch(&url, MAX_FILE, Duration::from_secs(180))
+                .await
+                .map_err(|e| format!("{name}: {e}"))?;
+            fs::write(dir.join(name), body).map_err(|e| format!("{name}: {e}"))?;
+        }
+        Ok(())
+    }
+
+    /// Installs release `tag` with the station's autoupdater, which checks the checksums, keeps
+    /// the current build in `prev/` and rolls back by itself if the service or the sound check
+    /// fails. It also waits for a pause in the music.
+    pub async fn install(&self, tag: &str, autoupdate: &str) -> Result<String, String> {
+        if !valid_tag(tag) {
+            return Err("unexpected release tag".into());
+        }
+        if !Path::new(autoupdate).exists() {
+            return Err(format!("нет {autoupdate}"));
+        }
+        let dir = Path::new(DOWNLOAD_DIR);
+        let _ = fs::remove_dir_all(dir);
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(dir)
+            .map_err(|e| format!("{DOWNLOAD_DIR}: {e}"))?;
+        let result = match self.download(tag, dir).await {
+            Ok(()) => {
+                let log = autoupdate_dir(autoupdate);
+                run(
+                    &format!(
+                        "SU_SOURCE={DOWNLOAD_DIR} SU_AUTO_INSTALL=1 sh {autoupdate} once >/dev/null 2>&1; \
+                         tail -n 3 {log}/update.log; \
+                         grep -q ' / ubifs rw' /proc/mounts && mount -o remount,ro / ; true"
+                    ),
+                    Duration::from_secs(300),
+                )
+                .await
+            }
+            Err(e) => Err(format!("не скачалось: {e}")),
+        };
+        let _ = fs::remove_dir_all(dir);
+        result
+    }
+}
+
+/// Release tags go into URLs and callback data.
+pub fn valid_tag(tag: &str) -> bool {
+    !tag.is_empty()
+        && tag.len() <= 40
+        && tag
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+}
+
+/// The autoupdater keeps its log and the previous build next to itself.
+fn autoupdate_dir(autoupdate: &str) -> &str {
+    autoupdate.rsplit_once('/').map_or("/", |(dir, _)| dir)
 }
 
 /// Runs a fixed shell command (no user input in it) and returns its exit status and output tail.
@@ -198,28 +302,14 @@ async fn run(script: &str, wait: Duration) -> Result<String, String> {
     }
 }
 
-/// Installs the latest official release with the station's autoupdater: it downloads, checks the
-/// checksums, keeps the current build in `prev/`, and rolls back by itself if the service or the
-/// sound check fails.
-pub async fn install_latest() -> Result<String, String> {
-    if !Path::new(AUTOUPDATE).exists() {
-        return Err(format!("нет {AUTOUPDATE}"));
-    }
-    let script = format!(
-        "SU_AUTO_INSTALL=1 sh {AUTOUPDATE} once >/dev/null 2>&1; \
-         tail -n 3 {AUTOUPDATE_DIR}/update.log; \
-         grep -q ' / ubifs rw' /proc/mounts && mount -o remount,ro / ; true"
-    );
-    run(&script, Duration::from_secs(300)).await
-}
-
 /// Puts back the build the autoupdater saved before the last install.
-pub async fn rollback() -> Result<String, String> {
+pub async fn rollback(autoupdate: &str) -> Result<String, String> {
+    let prev = format!("{}/prev", autoupdate_dir(autoupdate));
     let script = format!(
-        "[ -f {AUTOUPDATE_DIR}/prev/soundiya ] || {{ echo 'нет сохранённой сборки'; exit 1; }}; \
+        "[ -f {prev}/soundiya ] || {{ echo 'нет сохранённой сборки'; exit 1; }}; \
          {APP}/stop.sh >/dev/null 2>&1; \
          for f in soundiya install.sh run.sh start.sh stop.sh; do \
-           [ -f {AUTOUPDATE_DIR}/prev/$f ] && cp {AUTOUPDATE_DIR}/prev/$f {APP}/$f.new && mv {APP}/$f.new {APP}/$f; \
+           [ -f {prev}/$f ] && cp {prev}/$f {APP}/$f.new && mv {APP}/$f.new {APP}/$f; \
          done; \
          {APP}/start.sh >/dev/null 2>&1; sha256sum {APP}/soundiya | cut -c1-12"
     );

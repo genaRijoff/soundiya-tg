@@ -21,17 +21,25 @@ pub struct Config {
     /// Check GitHub for new soundiya releases and for news on `watch_issue`.
     #[serde(default = "yes")]
     pub updates: bool,
-    /// The soundiya repository, `owner/name`.
+    /// Where soundiya releases come from, `owner/name`: the fork that builds every upstream
+    /// release with `STATE`, so updates keep the bot working.
     #[serde(default = "default_repo")]
     pub github_repo: String,
-    /// An issue in `github_repo` to report news about (an answer, closed); 0, the default, turns it off.
+    /// The repository of `watch_issue`, `owner/name`.
+    #[serde(default = "default_issue_repo")]
+    pub issue_repo: String,
+    /// An issue in `issue_repo` to report news about (an answer, closed); 0, the default, turns it off.
     #[serde(default = "default_issue")]
     pub watch_issue: u64,
-    /// GitHub endpoints; only tests change them.
+    /// GitHub endpoints and the station's autoupdater script; only tests change them.
     #[serde(default = "default_github_api")]
     pub github_api: String,
     #[serde(default = "default_github_raw")]
     pub github_raw: String,
+    #[serde(default = "default_github_download")]
+    pub github_download: String,
+    #[serde(default = "default_autoupdate")]
+    pub autoupdate: String,
 }
 
 fn yes() -> bool {
@@ -41,6 +49,9 @@ fn default_api() -> String {
     DEFAULT_API.to_owned()
 }
 fn default_repo() -> String {
+    "genaRijoff/soundiya".to_owned()
+}
+fn default_issue_repo() -> String {
     "ShadowBlade83/soundiya".to_owned()
 }
 fn default_issue() -> u64 {
@@ -51,6 +62,12 @@ fn default_github_api() -> String {
 }
 fn default_github_raw() -> String {
     "https://raw.githubusercontent.com".to_owned()
+}
+fn default_github_download() -> String {
+    "https://github.com".to_owned()
+}
+fn default_autoupdate() -> String {
+    crate::updates::AUTOUPDATE.to_owned()
 }
 fn secure_url(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://127.0.0.1")
@@ -82,9 +99,25 @@ impl Config {
         if self.users.is_empty() || self.users.iter().any(|&id| id <= 0) {
             return Err("users must list your numeric Telegram id (from @userinfobot)".into());
         }
-        if !secure_url(&self.api) || !secure_url(&self.github_api) || !secure_url(&self.github_raw)
+        if ![
+            &self.api,
+            &self.github_api,
+            &self.github_raw,
+            &self.github_download,
+        ]
+        .iter()
+        .all(|url| secure_url(url))
         {
-            return Err("api, github_api and github_raw must be https:// URLs".into());
+            return Err("api and the github_* endpoints must be https:// URLs".into());
+        }
+        // The path goes into a shell command.
+        if !self.autoupdate.starts_with('/')
+            || !self
+                .autoupdate
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-'))
+        {
+            return Err("autoupdate must be an absolute path of [A-Za-z0-9/._-]".into());
         }
         let name = |part: &str| {
             !part.is_empty()
@@ -92,10 +125,11 @@ impl Config {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
         };
-        match self.github_repo.split_once('/') {
-            Some((owner, repo)) if name(owner) && name(repo) => Ok(()),
-            _ => Err("github_repo must look like owner/name".into()),
+        let repo = |text: &str| matches!(text.split_once('/'), Some((o, r)) if name(o) && name(r));
+        if !repo(&self.github_repo) || !repo(&self.issue_repo) {
+            return Err("github_repo and issue_repo must look like owner/name".into());
         }
+        Ok(())
     }
 
     pub fn allowed(&self, user: i64) -> bool {
@@ -135,8 +169,10 @@ mod tests {
         assert!(config.notify);
         assert_eq!(config.api, "https://api.telegram.org");
         assert!(config.updates);
-        assert_eq!(config.github_repo, "ShadowBlade83/soundiya");
+        assert_eq!(config.github_repo, "genaRijoff/soundiya");
+        assert_eq!(config.issue_repo, "ShadowBlade83/soundiya");
         assert_eq!(config.watch_issue, 0);
+        assert_eq!(config.autoupdate, crate::updates::AUTOUPDATE);
     }
 
     #[test]
@@ -160,6 +196,10 @@ mod tests {
             format!(r#"{{"token":"{TOKEN}","users":[42],"typo":1}}"#),
             format!(r#"{{"token":"{TOKEN}","users":[42],"github_repo":"a/b/../c"}}"#),
             format!(r#"{{"token":"{TOKEN}","users":[42],"github_api":"http://evil"}}"#),
+            format!(r#"{{"token":"{TOKEN}","users":[42],"github_download":"http://evil"}}"#),
+            format!(r#"{{"token":"{TOKEN}","users":[42],"issue_repo":"a"}}"#),
+            format!(r#"{{"token":"{TOKEN}","users":[42],"autoupdate":"/x; reboot"}}"#),
+            format!(r#"{{"token":"{TOKEN}","users":[42],"autoupdate":"relative.sh"}}"#),
         ] {
             let file = write(0o600, &text);
             assert!(Config::load(file.path()).is_err(), "{text}");

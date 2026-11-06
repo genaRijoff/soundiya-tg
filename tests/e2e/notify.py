@@ -46,9 +46,9 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code); self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
     def do_GET(self):
         calls.append(("GET", self.path, self.headers.get("User-Agent")))
-        if self.path == "/repos/ShadowBlade83/soundiya/releases/latest":
-            return self.reply({"tag_name": "v0.1.11", "html_url": "https://github.com/ShadowBlade83/soundiya/releases/tag/v0.1.11"})
-        if self.path == "/ShadowBlade83/soundiya/v0.1.11/src/control.rs":
+        if self.path == "/repos/genaRijoff/soundiya/releases/latest":
+            return self.reply({"tag_name": "v0.1.11", "html_url": "https://github.com/genaRijoff/soundiya/releases/tag/v0.1.11"})
+        if self.path == "/genaRijoff/soundiya/v0.1.11/src/control.rs":
             return self.reply(None, raw=b'match x { "STATE" => 1 }')
         if self.path == "/repos/ShadowBlade83/soundiya/issues/5":
             return self.reply({"state": "open", "comments": 2, "html_url": "https://github.com/ShadowBlade83/soundiya/issues/5"})

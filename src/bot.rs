@@ -151,7 +151,7 @@ impl Bot {
     ) -> Self {
         let github = config
             .updates
-            .then(|| GitHub::new(&config.github_api, &config.github_raw, &config.github_repo))
+            .then(|| GitHub::new(&config))
             .and_then(|g| g.map_err(|e| eprintln!("updates: {e}")).ok());
         Bot {
             access: Mutex::new(Access::load(&access_path)),
@@ -1005,15 +1005,8 @@ impl Bot {
     ) {
         let (action, tag) = value.split_once(':').unwrap_or((value, ""));
         match action {
+            "s" | "i" if !updates::valid_tag(tag) => self.answer(query, "").await,
             "s" => {
-                let tag_ok = !tag.is_empty()
-                    && tag.len() <= 40
-                    && tag
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'));
-                if !tag_ok {
-                    return self.answer(query, "").await;
-                }
                 let mut seen = Seen::load(&self.seen_path).unwrap_or_default();
                 seen.skipped = Some(tag.to_owned());
                 seen.save(&self.seen_path);
@@ -1039,7 +1032,7 @@ impl Bot {
                 )
                 .await;
                 let wait = if install {
-                    "⏳ Ставлю последнюю версию soundiya… до 5 минут, в конце будет короткий гудок проверки звука."
+                    "⏳ Скачиваю и ставлю soundiya… до 5 минут, в конце будет короткий гудок проверки звука."
                 } else {
                     "⏳ Возвращаю прежнюю сборку…"
                 };
@@ -1048,10 +1041,10 @@ impl Bot {
                     // The autoupdater waits for a pause in the music; give it one.
                     let _ = self.command("PAUSE", "").await;
                 }
-                let result = if install {
-                    updates::install_latest().await
-                } else {
-                    updates::rollback().await
+                let result = match (&self.github, install) {
+                    (Some(github), true) => github.install(tag, &self.config.autoupdate).await,
+                    (None, true) => Err("проверка обновлений выключена".to_owned()),
+                    (_, false) => updates::rollback(&self.config.autoupdate).await,
                 };
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 let (text, keyboard) = self.after_update(install, result).await;
@@ -1102,9 +1095,7 @@ impl Bot {
 /// The message about a release: whether the bot keeps working on it, and the buttons.
 fn release_offer(release: &Release) -> (String, serde_json::Value) {
     let state = match release.has_state {
-        Some(true) => {
-            "✅ В ней есть STATE: бот продолжит работать полностью. После установки можно вернуть автообновление (install-soundiya-build.ps1 -Restore)."
-        }
+        Some(true) => "✅ В ней есть STATE: бот продолжит работать полностью.",
         Some(false) => {
             "⚠️ В ней нет STATE: после установки в боте перестанут работать карточка и очередь. Откатить можно кнопкой."
         }
