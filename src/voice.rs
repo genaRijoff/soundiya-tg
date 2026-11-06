@@ -25,19 +25,19 @@ const DECODE_TIMEOUT: Duration = Duration::from_secs(30);
 const WATCH_EVERY: Duration = Duration::from_millis(50);
 /// `/voicevol` range, percent of the automatic level.
 pub const VOLUME_MIN: u16 = 50;
-pub const VOLUME_MAX: u16 = 200;
-/// Speech is brought to this RMS (about -16 dBFS), measured only where there is sound.
-const TARGET_RMS: f64 = 5000.0;
-/// ...but a near-silent recording is not raised more than this (it would be all noise).
-const MAX_BOOST: f64 = 8.0;
+pub const VOLUME_MAX: u16 = 400;
+/// Speech is brought to this RMS (about -11 dBFS), measured only where there is sound:
+/// loud enough next to music mastered as loud as SoundCloud's.
+const TARGET_RMS: f64 = 9000.0;
+/// ...but a near-silent recording is not raised more than this (+24 dB; more is all noise).
+const MAX_BOOST: f64 = 16.0;
 /// 20 ms windows quieter than this (about -50 dBFS) are pauses and do not count.
 const GATE_RMS: f64 = 100.0;
 /// Above this share of full scale peaks are rounded off smoothly instead of clipping.
 const KNEE: f64 = 0.7;
 
-/// Brings speech to one loudness, times `percent` / 100, without hard clipping.
-/// Returns the gain applied.
-pub fn level(samples: &mut [i16], percent: u16) -> f64 {
+/// The RMS of the speech: 20 ms windows above the gate only. None for silence.
+pub fn speech_rms(samples: &[i16]) -> Option<f64> {
     let window = RATE as usize / 50;
     let (mut power, mut windows) = (0.0, 0u32);
     for chunk in samples.chunks(window) {
@@ -47,11 +47,13 @@ pub fn level(samples: &mut [i16], percent: u16) -> f64 {
             windows += 1;
         }
     }
-    let auto = if windows == 0 {
-        1.0
-    } else {
-        (TARGET_RMS / (power / f64::from(windows)).sqrt()).min(MAX_BOOST)
-    };
+    (windows > 0).then(|| (power / f64::from(windows)).sqrt())
+}
+
+/// Brings speech to one loudness, times `percent` / 100, without hard clipping.
+/// Returns the gain applied.
+pub fn level(samples: &mut [i16], percent: u16) -> f64 {
+    let auto = speech_rms(samples).map_or(1.0, |rms| (TARGET_RMS / rms).min(MAX_BOOST));
     let gain = auto * f64::from(percent.clamp(VOLUME_MIN, VOLUME_MAX)) / 100.0;
     for sample in samples.iter_mut() {
         let x = f64::from(*sample) * gain / 32768.0;
@@ -121,16 +123,26 @@ impl Files {
         file.write_all(data).map_err(|e| e.to_string())
     }
 
-    /// Applies [`level`] to the decoded file in place.
-    pub fn level(&self, percent: u16) -> Result<(), String> {
+    /// Applies [`level`] to the decoded file in place; returns a line for the log (numbers only).
+    pub fn level(&self, percent: u16) -> Result<String, String> {
         let bytes = fs::read(&self.pcm).map_err(|e| e.to_string())?;
         let mut samples: Vec<i16> = bytes
             .chunks_exact(2)
             .map(|b| i16::from_le_bytes([b[0], b[1]]))
             .collect();
-        level(&mut samples, percent);
+        let before = speech_rms(&samples);
+        let gain = level(&mut samples, percent);
         let out: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
-        fs::write(&self.pcm, out).map_err(|e| e.to_string())
+        fs::write(&self.pcm, out).map_err(|e| e.to_string())?;
+        let db = |rms: f64| 20.0 * (rms / 32768.0).log10();
+        Ok(match (before, speech_rms(&samples)) {
+            (Some(a), Some(b)) => format!(
+                "voice: speech {:.0} dBFS -> {:.0} dBFS (gain x{gain:.1}, /voicevol {percent} %)",
+                db(a),
+                db(b)
+            ),
+            _ => format!("voice: silence (/voicevol {percent} %)"),
+        })
     }
 
     /// OGG/Opus -> PCM with `maind --gst-launch`; the OGG is deleted right after.
@@ -275,9 +287,9 @@ mod tests {
         let knee = (KNEE * 32767.0) as i16;
         assert!(spiky.iter().step_by(100).all(|&s| s > knee));
         assert!(spiky.iter().all(|&s| s > -32767));
-        // Outside 50-200 is held to the range.
+        // Outside 50-400 is held to the range.
         let (mut a, mut b) = (tone(1500.0, 1), tone(1500.0, 1));
-        assert_eq!(level(&mut a, 500), level(&mut b, 200));
+        assert_eq!(level(&mut a, 500), level(&mut b, 400));
     }
 
     /// A stand-in decoder (`sh -c`) and its output file in a test folder.

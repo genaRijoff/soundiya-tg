@@ -97,7 +97,7 @@ powershell -ExecutionPolicy Bypass -File .\windows\install-soundiya-build.ps1 -R
 | `/users`, `/allow ID [имя]`, `/deny ID` — доступ | владелец |
 | `/updates` — новые версии soundiya | владелец |
 | голосовое сообщение — проиграть на колонке | владелец (`/voice all` — и слушатели) |
-| `/voicevol 50…200` — громкость голосовых, % от автоуровня | владелец |
+| `/voicevol 50…400` — громкость голосовых, % от автоуровня | владелец |
 | `/voice all\|owners\|off` — голосовые: все слушатели / отмеченные в `/admin` / никто | владелец |
 
 ## Настройки

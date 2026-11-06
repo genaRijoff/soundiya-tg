@@ -135,7 +135,8 @@ check([l for l in received if l.startswith("VOICE")] and received[0].startswith(
 check(voice_seen.get("size") == 64000, "the leveled file keeps its length")
 check(voice_seen.get("others") == ["v77-17.pcm"], "the OGG is deleted after decoding")
 rms = voice_seen.get("rms", [])
-check(len(rms) == 2 and abs(rms[0] - 7500) < 300, f"quiet speech is leveled, times /voicevol 150 (RMS {rms[:1]})")
+check(len(rms) == 2 and abs(rms[0] - 13500) < 400, f"quiet speech is leveled, times /voicevol 150 (RMS {rms[:1]})")
+check("voice: speech -30 dBFS -> -8 dBFS (gain x12.7, /voicevol 150 %)" in err, "the log shows the levels")
 check(json.load(open(os.path.join(WORK, "access.json"))).get("voice_volume") == 150
       and json.load(open(os.path.join(WORK, "access.json"))).get("voice_from") == "all", "/voicevol and /voice are saved")
 check(voice_seen.get("mode") == "0o700", "the voice folder is private")

@@ -541,7 +541,7 @@ impl Bot {
         files.write_ogg(&data)?;
         files.decode(&self.config.gst).await?;
         let percent = self.access.lock().unwrap().voice_volume();
-        files.level(percent)?;
+        eprintln!("{}", files.level(percent)?);
         let pcm = files.pcm.to_str().ok_or("bad path")?;
         self.command("VOICE", pcm).await.map_err(|e| {
             if e == "unknown command" {

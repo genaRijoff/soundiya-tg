@@ -9,7 +9,7 @@ use crate::{
 use serde_json::{Value, json};
 
 /// The `/voicevol` step of the −/+ buttons.
-pub const VOLUME_STEP: u16 = 10;
+pub const VOLUME_STEP: u16 = 25;
 
 pub fn mode_text(mode: VoiceFrom) -> &'static str {
     match mode {
@@ -51,9 +51,9 @@ pub fn home(access: &Access, mode: VoiceFrom) -> (String, Value) {
         [button(&format!("👥 Слушатели ({})", access.listeners.len()), "x:list")],
         [button(&format!("🎙 Голосовые: {} ▸", short_mode(mode)), "x:vm")],
         [
-            button("🔉 −10", "x:vv:-"),
+            button("🔉 −25", "x:vv:-"),
             button(&format!("🎙 {volume} %"), "x:home"),
-            button("🔊 +10", "x:vv:+"),
+            button("🔊 +25", "x:vv:+"),
         ],
         [button("🔄 Обновления soundiya", "x:upd")],
     ]});
@@ -277,9 +277,9 @@ mod tests {
 
     #[test]
     fn volume_steps_stay_in_range() {
-        assert_eq!(step_volume(100, true), 110);
-        assert_eq!(step_volume(195, true), 200);
-        assert_eq!(step_volume(55, false), 50);
+        assert_eq!(step_volume(100, true), 125);
+        assert_eq!(step_volume(390, true), 400);
+        assert_eq!(step_volume(60, false), 50);
         assert_eq!(step_volume(50, false), 50);
     }
 }
