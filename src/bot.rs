@@ -4,6 +4,7 @@ use crate::{
     admin,
     config::{Config, VoiceFrom},
     soundiya::{self, State},
+    speaker,
     telegram::{Api, CallbackQuery, Error, Message, Update, User},
     updates::{self, GitHub, Release, Seen},
     view, voice,
@@ -46,6 +47,8 @@ pub struct Bot {
     updating: AtomicBool,
     /// A voice message is on its way to the speaker: the next one waits.
     voice_busy: AtomicBool,
+    /// Owners' Telegram first names, for "передай …" (fetched by `watch_speaker`).
+    owner_names: Mutex<Vec<(i64, String)>>,
     /// Listeners the owners let in, and where they are kept.
     access: Mutex<Access>,
     access_path: PathBuf,
@@ -171,6 +174,7 @@ impl Bot {
             seen_path,
             updating: AtomicBool::new(false),
             voice_busy: AtomicBool::new(false),
+            owner_names: Mutex::new(Vec::new()),
             api,
             config,
             socket,
@@ -442,6 +446,110 @@ impl Bot {
             }
             Err(e) => self.reply(chat, &format!("⚠️ {}", view::esc(&e))).await,
         }
+    }
+
+    // ---- "Алиса, передай …" ----
+
+    /// While the owner keeps it on, collects "передай …" phrases from soundiya (which keeps
+    /// taking them from Alice only as long as this asks) and passes them on.
+    pub async fn watch_speaker(self: Arc<Self>) {
+        const EVERY: Duration = Duration::from_millis(1500);
+        let mut names_at: Option<Instant> = None;
+        let mut last_sent: Option<Instant> = None;
+        let mut warned = false;
+        loop {
+            tokio::time::sleep(EVERY).await;
+            if !self.access.lock().unwrap().speaker_messages() {
+                continue;
+            }
+            if names_at.is_none_or(|at| at.elapsed() > Duration::from_secs(3600)) {
+                let mut names = Vec::new();
+                for &id in &self.config.users {
+                    if let Some(name) = self.api.first_name(id).await {
+                        names.push((id, name));
+                    }
+                }
+                *self.owner_names.lock().unwrap() = names;
+                names_at = Some(Instant::now());
+            }
+            let texts: Vec<String> = match self.command("MESSAGES", "").await {
+                Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+                Err(e) => {
+                    if !warned {
+                        eprintln!("speaker: soundiya does not take messages ({e})");
+                        warned = true;
+                    }
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    continue;
+                }
+            };
+            warned = false;
+            for text in texts {
+                let reply = if last_sent.is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
+                    "Подождите немного и повторите".to_owned()
+                } else {
+                    match self.pass_on(&text).await {
+                        Ok(reply) => {
+                            last_sent = Some(Instant::now());
+                            reply
+                        }
+                        Err(reply) => reply,
+                    }
+                };
+                if let Err(e) = self.command("SAY", &reply).await {
+                    eprintln!("speaker: say: {e}");
+                }
+            }
+        }
+    }
+
+    /// Sends one "передай …" message; Ok or Err is what Alice says back.
+    async fn pass_on(&self, text: &str) -> Result<String, String> {
+        let people: Vec<speaker::Person> = {
+            let access = self.access.lock().unwrap();
+            let owners = self.owner_names.lock().unwrap();
+            owners
+                .iter()
+                .map(|(id, name)| speaker::Person {
+                    id: *id,
+                    name: name.clone(),
+                })
+                .chain(access.listeners.iter().map(|l| speaker::Person {
+                    id: l.id,
+                    name: l.name.clone(),
+                }))
+                .collect()
+        };
+        let (index, words) = speaker::address(text, &people).map_err(|miss| match miss {
+            speaker::Miss::Unknown(_) => "Не нашла, кому передать".to_owned(),
+            speaker::Miss::Ambiguous => "Таких имён несколько, не поняла кому".to_owned(),
+            speaker::Miss::Empty => "Не поняла, что передать".to_owned(),
+        })?;
+        let person = &people[index];
+        let message = format!("🗣 <b>С колонки:</b> {}", view::esc(&words));
+        self.api
+            .send(person.id, &message, None, false)
+            .await
+            .map_err(|e| {
+                eprintln!("speaker: send: {e}");
+                "Не получилось отправить".to_owned()
+            })?;
+        eprintln!("speaker: passed a message on to {}", person.id);
+        // A listener got it: the owners see what was sent from their speaker.
+        if !self.config.users.contains(&person.id) {
+            let copy = format!(
+                "🗣 С колонки → {}: {}",
+                view::esc(&person.name),
+                view::esc(&words)
+            );
+            for &owner in &self.config.users {
+                let _ = self.api.send(owner, &copy, None, true).await;
+            }
+        }
+        Ok(format!(
+            "Отправила в Телеграм. Получатель: {}",
+            speaker::spoken_name(&person.name)
+        ))
     }
 
     // ---- voice messages ----
@@ -1005,6 +1113,18 @@ impl Bot {
                 toast = format!("🎙 {level} %");
                 Some(admin::home(&access, mode))
             }
+            ("sm", _) => {
+                let mut access = self.access.lock().unwrap();
+                let on = !access.speaker_messages();
+                access.speaker_messages = Some(on);
+                toast = if on {
+                    "🗣 «Алиса, передай …» включено"
+                } else {
+                    "🗣 «Алиса, передай …» выключено"
+                }
+                .to_owned();
+                Some(admin::home(&access, mode))
+            }
             ("upd", _) => {
                 self.answer(query, "").await;
                 return self.updates_status(chat).await;
@@ -1060,7 +1180,7 @@ impl Bot {
             },
             _ => None,
         };
-        if matches!(action, "vm" | "vv" | "v" | "n")
+        if matches!(action, "vm" | "vv" | "v" | "n" | "sm")
             && let Err(e) = self.save_access()
         {
             toast = format!("⚠️ {e}");

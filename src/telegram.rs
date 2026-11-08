@@ -144,6 +144,10 @@ pub struct Voice {
     pub file_size: Option<u64>,
 }
 #[derive(Debug, Deserialize)]
+pub struct ChatInfo {
+    pub first_name: Option<String>,
+}
+#[derive(Debug, Deserialize)]
 pub struct File {
     pub file_path: Option<String>,
 }
@@ -292,6 +296,15 @@ impl Api {
         self.quick::<bool>("answerCallbackQuery", &body)
             .await
             .map(|_| ())
+    }
+
+    /// A private chat's first name: how the owners are called in "передай …".
+    pub async fn first_name(&self, chat: i64) -> Option<String> {
+        let info: ChatInfo = self
+            .quick("getChat", &json!({"chat_id": chat}))
+            .await
+            .ok()?;
+        info.first_name
     }
 
     pub async fn get_file(&self, file_id: &str) -> Result<File, Error> {

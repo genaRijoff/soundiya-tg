@@ -43,9 +43,15 @@ pub fn home(access: &Access, mode: VoiceFrom) -> (String, Value) {
         "⚙️ <b>Управление колонкой</b>\n\n\
          👥 Слушателей: {}\n\
          🎙 Голосовые: {}\n\
-         🔊 Громкость голосовых: {volume} % от автоуровня",
+         🔊 Громкость голосовых: {volume} % от автоуровня\n\
+         🗣 «Алиса, передай …»: {}",
         access.listeners.len(),
-        mode_text(mode)
+        mode_text(mode),
+        if access.speaker_messages() {
+            "включено — получат ты и слушатели"
+        } else {
+            "выключено"
+        }
     );
     let keyboard = json!({"inline_keyboard": [
         [button(&format!("👥 Слушатели ({})", access.listeners.len()), "x:list")],
@@ -55,6 +61,10 @@ pub fn home(access: &Access, mode: VoiceFrom) -> (String, Value) {
             button(&format!("🎙 {volume} %"), "x:home"),
             button("🔊 +25", "x:vv:+"),
         ],
+        [button(
+            if access.speaker_messages() { "🗣 Сообщения с колонки: вкл" } else { "🗣 Сообщения с колонки: выкл" },
+            "x:sm",
+        )],
         [button("🔄 Обновления soundiya", "x:upd")],
     ]});
     (text, keyboard)
@@ -223,8 +233,11 @@ mod tests {
         assert!(text.contains("Слушателей: 2") && text.contains("100 %"));
         assert_eq!(
             datas(&keyboard),
-            ["x:list", "x:vm", "x:vv:-", "x:home", "x:vv:+", "x:upd"]
+            [
+                "x:list", "x:vm", "x:vv:-", "x:home", "x:vv:+", "x:sm", "x:upd"
+            ]
         );
+        assert!(text.contains("передай …»: выключено"));
 
         let (text, keyboard) = list(&a, &[42], VoiceFrom::Owners);
         assert!(text.contains("<code>42</code>"));

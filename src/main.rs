@@ -5,6 +5,7 @@ mod admin;
 mod bot;
 mod config;
 mod soundiya;
+mod speaker;
 mod telegram;
 mod updates;
 mod view;
@@ -103,6 +104,7 @@ fn run(config_path: PathBuf, socket: PathBuf) -> ExitCode {
         let bot = Arc::new(bot::Bot::new(api, config, socket, seen, access));
         tokio::spawn(bot.clone().watch());
         tokio::spawn(bot.clone().watch_updates());
+        tokio::spawn(bot.clone().watch_speaker());
         let mut terminate =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                 .map_err(|e| e.to_string())?;
