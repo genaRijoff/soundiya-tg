@@ -125,6 +125,7 @@ function renderPlayer(s) {
   $('sleeptext').textContent = s.sleep ? 'Сон через ' + s.sleep + ' мин' : 'Таймер сна';
   $('sleepbtn').classList.toggle('on', !$('sleeppop').hidden || !!s.sleep);
   renderQueue(s);
+  markPlaying();
   if (signedIn !== s.signed_in) { signedIn = s.signed_in; renderForYou(); loadMine(); }
   renderAbout(s);
 }
@@ -138,6 +139,18 @@ function renderQueue(s) {
     i + 1 === s.index && s.state !== 'idle' ? 'now' : '')));
   $('qempty').style.display = s.queue.length ? 'none' : 'block';
   $('qcount').textContent = s.queue.length && s.index ? s.index + ' из ' + s.queue.length : '';
+}
+// The track that plays is marked wherever it is listed: search, likes, charts, the queue.
+let markedId = null;
+function markPlaying() {
+  const t = current();
+  const id = t && player.state !== 'idle' ? String(t.id) : null;
+  if (id === markedId && !document.querySelector('[data-id]:not(.marked)')) return;
+  markedId = id;
+  document.querySelectorAll('[data-id]').forEach(el => {
+    el.classList.add('marked');
+    el.classList.toggle('playing', el.dataset.id === id);
+  });
 }
 async function jump(n) { await run($('actmsg'), 'Включаю…', { do: 'jump', n }); showQueue(false); }
 
@@ -234,9 +247,10 @@ if (HOVER) {
 document.addEventListener('click', e => { if (!$('qpop').hidden && !$('qwrap').contains(e.target)) showQueue(false); });
 
 // ---- search ----
-function openSearch() { $('psearch').hidden = false; $('psearchbtn').classList.add('on'); $('psearchbtn').setAttribute('aria-expanded', 'true'); setTimeout(() => $('query').focus(), 30); }
+function openSearch() { $('psearch').hidden = false; window.scrollTo({ top: 0, behavior: 'smooth' }); $('psearchbtn').classList.add('on'); $('psearchbtn').setAttribute('aria-expanded', 'true'); setTimeout(() => $('query').focus(), 30); }
 function closeSearch() { $('psearch').hidden = true; $('psearchbtn').classList.remove('on'); $('psearchbtn').setAttribute('aria-expanded', 'false'); }
 $('psearchbtn').addEventListener('click', () => { if ($('psearch').hidden) openSearch(); else closeSearch(); });
+$('searchclose').addEventListener('click', closeSearch);
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   if (!$('psearch').hidden) closeSearch();
@@ -256,7 +270,30 @@ $('searchform').addEventListener('submit', async e => {
   const ul = document.createElement('ul'); ul.className = 'list';
   ul.append(...r.map((t, i) => trackItem(t, mmss(t.duration), () => playFrom(r, i, $('searchmsg')))));
   box.append(ul);
+  box.scrollTop = 0;
+  fitResults();
+  markPlaying();
 });
+
+// Four results are seen at once, with a glimpse of the fifth to show that the rest scroll.
+const RESULTS_SHOWN = 4;
+function fitResults() {
+  const box = $('results'), rows = box.querySelectorAll('li');
+  box.style.maxHeight = '';
+  box.classList.remove('more');
+  if (rows.length <= RESULTS_SHOWN) return;
+  const top = rows[0].getBoundingClientRect().top;
+  const next = rows[RESULTS_SHOWN].getBoundingClientRect().top;
+  box.style.maxHeight = Math.round(next - top + 22) + 'px';
+  fadeResults();
+}
+// The glimpse of the next row fades out until the list is scrolled to its end.
+function fadeResults() {
+  const box = $('results');
+  box.classList.toggle('more', box.scrollHeight - box.scrollTop - box.clientHeight > 4);
+}
+$('results').addEventListener('scroll', fadeResults, { passive: true });
+window.addEventListener('resize', () => { if (!$('psearch').hidden) fitResults(); });
 
 // ---- lists, cards ----
 function artBox(url, cls) {
@@ -279,6 +316,7 @@ function trackItem(t, right, onclick, cls) {
   const sm = document.createElement('small'); sm.textContent = t.artist; tx.append(sm);
   const d = document.createElement('div'); d.className = 'd'; d.textContent = right || '';
   li.append(artBox(t.art, 'art'), tx, d);
+  li.dataset.id = t.id;
   li.onclick = onclick;
   return li;
 }
@@ -351,7 +389,12 @@ async function loadChart() {
   if (r.error) { $('chartempty').textContent = r.error; return; }
   chartTracks = r;
   $('chartempty').hidden = r.length > 0; $('chartempty').textContent = 'Пусто';
-  $('chart').replaceChildren(...r.map((t, i) => card(t.art, t.title, t.artist, () => playFrom(chartTracks, i, $('homemsg')))));
+  $('chart').replaceChildren(...r.map((t, i) => {
+    const c = card(t.art, t.title, t.artist, () => playFrom(chartTracks, i, $('homemsg')));
+    c.dataset.id = t.id;
+    return c;
+  }));
+  markPlaying();
 }
 $('charttitle').addEventListener('click', () => run($('homemsg'), 'Включаю…', { do: 'chart', trending: true, genre: genre || null }));
 
@@ -374,6 +417,7 @@ async function loadMine() {
     likeTracks = likes;
     $('likesempty').hidden = likes.length > 0; $('likesempty').textContent = 'Лайков пока нет';
     $('likes').replaceChildren(...likes.map((t, i) => trackItem(t, mmss(t.duration), () => playFrom(likeTracks, i, $('minemsg')))));
+    markPlaying();
   }
 }
 $('likesall').addEventListener('click', () => run($('minemsg'), 'Включаю лайки…', { do: 'likes' }));

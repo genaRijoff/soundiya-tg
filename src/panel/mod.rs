@@ -351,9 +351,21 @@ fn safe_page(url: &str) -> String {
     if ok { url.to_owned() } else { String::new() }
 }
 
+/// Some uploaders' titles arrive HTML-escaped ("Onyx &amp; Dope D.O.D."): shown as typed.
+fn unescape(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#039;", "'")
+        .replace("&amp;", "&")
+}
+
 impl Track {
     fn cleaned(self) -> Track {
         Track {
+            artist: unescape(&self.artist),
+            title: unescape(&self.title),
             art: safe_art(&self.art),
             url: safe_page(&self.url),
             ..self
@@ -602,6 +614,8 @@ fn clean_playlists(text: &str) -> Result<String, String> {
     let lists: Vec<Playlist> = lists
         .into_iter()
         .map(|p| Playlist {
+            title: unescape(&p.title),
+            user: unescape(&p.user),
             art: safe_art(&p.art),
             ..p
         })
@@ -710,6 +724,17 @@ mod tests {
         ] {
             assert_eq!(safe_page(bad), "", "{bad}");
         }
+    }
+
+    #[test]
+    fn escaped_titles_are_shown_as_typed() {
+        assert_eq!(unescape("Onyx &amp; Dope D.O.D."), "Onyx & Dope D.O.D.");
+        assert_eq!(
+            unescape("a &lt;b&gt; &quot;c&quot; d&#39;s"),
+            "a <b> \"c\" d's"
+        );
+        // Decoded once: "&amp;lt;" was "&lt;" as typed.
+        assert_eq!(unescape("&amp;lt;"), "&lt;");
     }
 
     #[test]

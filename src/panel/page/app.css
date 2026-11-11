@@ -1029,3 +1029,50 @@
   .qpop { left: 0; right: 0; width: auto; }
   /* The volume slider is always there; the sleep timer opens from its button. */
   .volpop + .volpop { margin-top: 8px; }
+  /* Pressing on a phone: no grey tap flash, no box behind cards, and nothing stays lit after a
+     tap (touch screens keep :hover on the last tapped element). A short press-in instead. */
+  * { -webkit-tap-highlight-color: transparent; }
+  .card:hover:not(:disabled), .card:active:not(:disabled) { background: none; border-color: transparent; transform: none; }
+  .card:active .cv { transform: scale(.96); }
+  ul.list li { transition: transform .12s, background .15s; }
+  ul.list li:active { transform: scale(.985); background: var(--hover); }
+  @media (hover: none) {
+    button:hover:not(:disabled) { background: var(--bg); }
+    button.primary:hover:not(:disabled) { background: linear-gradient(135deg, #ff7a1a, #ff3d5a); }
+    .controls.small button.on:hover:not(:disabled) { background: rgba(255, 106, 31, .12); }
+    .genres button.on:hover:not(:disabled) { background: linear-gradient(135deg, #ff7a1a, #ff3d5a); }
+    .pill:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+    .card:hover:not(:disabled) { background: none; }
+    .psearchbtn:hover:not(.on) { color: var(--muted); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+    ul.list li:hover { background: transparent; transform: none; }
+    ul.list li:active { background: var(--hover); }
+    .card:hover .cv { transform: none; }
+    .card:active .cv { transform: scale(.96); }
+  }
+  /* Search is its own card above the player, in the same glass; the magnifier opens and closes it. */
+  section.psearch { margin: 0 0 14px; animation: rise .25s cubic-bezier(.2, .8, .2, 1); }
+  section.psearch .whead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  section.psearch .whead b { font-size: 17px; font-weight: 700; }
+  section.psearch #results { max-height: 52vh; }
+  section.psearch ul.list { margin-top: 6px; }
+  section.psearch .whead .icon.sm { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 14px; color: var(--muted); }
+  /* The results scroll inside the card, and a scroll box cuts what sticks out of it: the rows'
+     highlight reaches 10px past the text on each side, so the box gets that room back. */
+  section.psearch #results { margin: 0 -10px; padding: 0 10px 4px; }
+  /* The track that plays, wherever it is listed (also on touch screens, where hover is reset above). */
+  ul.list li.playing, ul.list li.playing:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+  ul.list li.playing .t { font-weight: 600; }
+  ul.list li.playing .t::before { content: "▶ "; color: var(--accent); }
+  ul.list li.playing .d { color: var(--accent); }
+  .card.playing .cv { box-shadow: 0 0 0 2px var(--accent), 0 4px 14px rgba(0, 0, 0, .18); }
+  .card.playing b { color: var(--accent); }
+  /* «Все»: an even grid that fills the width (two columns on a phone, more on a wide screen)
+     instead of fixed-size cards that leave a gap on the right. */
+  .shelfbox.all .shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 16px 14px; overflow: visible; }
+  .shelfbox.all .card, .shelfbox.all .card .cv { width: 100%; }
+  .shelfbox.all .card .cv { height: auto; aspect-ratio: 1 / 1; }
+  .shelfbox.all .shelfnav .icon.sm { display: none; }
+  section.psearch #results.more {
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 34px), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 34px), transparent);
+  }

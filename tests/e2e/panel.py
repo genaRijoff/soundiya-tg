@@ -46,7 +46,7 @@ def reply_for(cmd, arg):
     if cmd == "PLAYLISTS": return json.dumps([{"id": 500 + i, "title": t, "count": 10 + i, "art": ART % (40 + i), "user": "me"}
                                               for i, t in enumerate(["Утро", "Дорога", "Вечер", "Работа"])])
     if cmd == "CHART": return json.dumps([track(i) for i in range(3, 15)])
-    if cmd == "FIND": return json.dumps([track(i) for i in range(5, 11)])
+    if cmd == "FIND": return json.dumps([dict(track(5), title="Rain &amp; Fog")] + [track(i) for i in range(6, 11)])
     if cmd == "SIMILAR":
         seed = int(arg)
         # Each seed: two liked tracks (must be skipped) and new ones.
@@ -196,6 +196,7 @@ try:
     check(s == 200 and len(json.loads(body)) == 12, "a chart is listed")
     s, _, body = req("POST", "/api/list", {"kind": "find", "q": "bonobo\nNEXT"}, A)
     check(s == 200 and len(json.loads(body)) == 6, "search results")
+    check(json.loads(body)[0]["title"] == "Rain & Fog", "escaped titles are shown as typed")
     req("POST", "/api/cmd", {"do": "play", "ids": [1005, 1006, 1007]}, A)
     req("POST", "/api/cmd", {"do": "seek", "to": 90}, A)
     req("POST", "/api/cmd", {"do": "toggle"}, A)

@@ -32,16 +32,17 @@
   </section>
 
   <div id="app" hidden>
+  <section class="psearch" id="psearch" hidden>
+    <div class="whead"><b>Поиск</b><button class="icon sm" id="searchclose" type="button" title="Закрыть поиск" aria-label="Закрыть поиск">✕</button></div>
+    <form class="search" id="searchform">
+      <input type="text" id="query" placeholder="Трек, исполнитель или ссылка soundcloud.com" autocomplete="off" enterkeyhint="search">
+      <button class="primary" type="submit">Найти</button>
+    </form>
+    <div class="msg" id="searchmsg"></div>
+    <div id="results"></div>
+  </section>
   <section class="player">
     <button class="icon psearchbtn" id="psearchbtn" title="Поиск" aria-label="Поиск" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button>
-    <div class="psearch" id="psearch" hidden>
-      <form class="search" id="searchform">
-        <input type="text" id="query" placeholder="Трек, исполнитель или ссылка soundcloud.com" autocomplete="off" enterkeyhint="search">
-        <button class="primary" type="submit">Найти</button>
-      </form>
-      <div class="msg" id="searchmsg"></div>
-      <div id="results"></div>
-    </div>
     <div class="now">
       <img class="cover" id="cover" alt="" hidden>
       <div class="track" id="track">—</div>
