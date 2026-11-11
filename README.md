@@ -32,15 +32,6 @@ Telegram-пульт для [soundiya](https://github.com/ShadowBlade83/soundiya)
 </p>
 </details>
 
-<details open><summary>Скриншоты: веб-панель</summary>
-<p align="center">
-  <img src="docs/panel-home.jpg" height="520" alt="Веб-панель: плеер и «Для вас»">
-  <img src="docs/panel-queue.jpg" height="520" alt="Веб-панель: очередь">
-  <img src="docs/panel-mine.jpg" height="520" alt="Веб-панель: плейлисты и лайки">
-</p>
-<p align="center"><sub>Исполнители, названия и обложки на снимках придуманы для примера.</sub></p>
-</details>
-
 > Нужна soundiya с командами `STATE`/`JUMP` (для «передай» — `MESSAGES`/`SAY`, с `v0.1.10-bot.3`; для веб-панели — `FIND`/`LIKES`/`PLAYIDS`, с `v0.1.10-bot.4`) — из [релизов форка](https://github.com/genaRijoff/soundiya/releases) (`v…-bot`): каждые 6 часов GitHub Actions переносит наши патчи ([`bot-api`](https://github.com/genaRijoff/soundiya/tree/bot-api)) на новую версию автора, гоняет тесты и выпускает релиз. Скрипт сборки берёт последний такой релиз.
 
 ## Что нужно
