@@ -37,14 +37,25 @@ pub fn listener_voice(listener: &Listener, mode: VoiceFrom) -> bool {
     }
 }
 
-pub fn home(access: &Access, mode: VoiceFrom) -> (String, Value) {
+/// `panel`: the web panel's address and PIN while it is on.
+pub fn home(access: &Access, mode: VoiceFrom, panel: Option<(String, String)>) -> (String, Value) {
     let volume = access.voice_volume();
+    let panel_text = match &panel {
+        Some((address, pin)) => format!(
+            "включена — {} · PIN <tg-spoiler>{}</tg-spoiler>\n\
+             <i>Открывается только из домашней сети</i>",
+            esc(address),
+            esc(pin)
+        ),
+        None => "выключена".to_owned(),
+    };
     let text = format!(
         "⚙️ <b>Управление колонкой</b>\n\n\
          👥 Слушателей: {}\n\
          🎙 Голосовые: {}\n\
          🔊 Громкость голосовых: {volume} % от автоуровня\n\
-         🗣 «Алиса, передай …»: {}",
+         🗣 «Алиса, передай …»: {}\n\
+         🌐 Веб-панель: {panel_text}",
         access.listeners.len(),
         mode_text(mode),
         if access.speaker_messages() {
@@ -65,8 +76,23 @@ pub fn home(access: &Access, mode: VoiceFrom) -> (String, Value) {
             if access.speaker_messages() { "🗣 Сообщения с колонки: вкл" } else { "🗣 Сообщения с колонки: выкл" },
             "x:sm",
         )],
-        [button("🔄 Обновления soundiya", "x:upd")],
+        [button(
+            if panel.is_some() { "🌐 Веб-панель: вкл" } else { "🌐 Веб-панель: выкл" },
+            "x:pn",
+        )],
     ]});
+    let mut keyboard = keyboard;
+    if panel.is_some()
+        && let Some(rows) = keyboard["inline_keyboard"].as_array_mut()
+    {
+        rows.push(json!([button(
+            "🔑 Новый PIN — выйти на всех устройствах",
+            "x:pin"
+        )]));
+    }
+    if let Some(rows) = keyboard["inline_keyboard"].as_array_mut() {
+        rows.push(json!([button("🔄 Обновления soundiya", "x:upd")]));
+    }
     (text, keyboard)
 }
 
@@ -229,15 +255,20 @@ mod tests {
     #[test]
     fn views_link_to_each_other() {
         let a = access();
-        let (text, keyboard) = home(&a, VoiceFrom::Owners);
+        let (text, keyboard) = home(&a, VoiceFrom::Owners, None);
         assert!(text.contains("Слушателей: 2") && text.contains("100 %"));
         assert_eq!(
             datas(&keyboard),
             [
-                "x:list", "x:vm", "x:vv:-", "x:home", "x:vv:+", "x:sm", "x:upd"
+                "x:list", "x:vm", "x:vv:-", "x:home", "x:vv:+", "x:sm", "x:pn", "x:upd"
             ]
         );
         assert!(text.contains("передай …»: выключено"));
+        assert!(text.contains("Веб-панель: выключена"));
+        let panel = Some(("http://192.168.1.5:8765".to_owned(), "123456".to_owned()));
+        let (text, keyboard) = home(&a, VoiceFrom::Owners, panel);
+        assert!(text.contains("http://192.168.1.5:8765 · PIN <tg-spoiler>123456</tg-spoiler>"));
+        assert_eq!(datas(&keyboard)[6..], ["x:pn", "x:pin", "x:upd"]);
 
         let (text, keyboard) = list(&a, &[42], VoiceFrom::Owners);
         assert!(text.contains("<code>42</code>"));

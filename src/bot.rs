@@ -55,6 +55,8 @@ pub struct Bot {
     /// Strangers who asked for access since the start, with their names; each asks once.
     requests: Mutex<HashMap<i64, Request>>,
     last_action: Mutex<Option<Action>>,
+    /// The web panel's PIN, sessions and caches (`panel`).
+    panel: crate::panel::Panel,
 }
 
 /// More pending requests than this are ignored, so strangers cannot flood the owners.
@@ -160,6 +162,7 @@ impl Bot {
         socket: PathBuf,
         seen_path: PathBuf,
         access_path: PathBuf,
+        panel: crate::panel::Panel,
     ) -> Self {
         let github = config
             .updates
@@ -182,7 +185,60 @@ impl Bot {
             sleep_menus: Mutex::default(),
             wanted: Mutex::default(),
             wake: Notify::new(),
+            panel,
         }
+    }
+
+    // ---- what the web panel uses ----
+
+    pub fn panel(&self) -> &crate::panel::Panel {
+        &self.panel
+    }
+
+    pub fn panel_on(&self) -> bool {
+        self.access.lock().unwrap().panel()
+    }
+
+    pub async fn player(&self) -> Result<State, String> {
+        self.state().await
+    }
+
+    /// A panel command; the cards in the chats follow the change as usual.
+    pub async fn soundiya(&self, command: &str, argument: &str) -> Result<String, String> {
+        let reply = self.command(command, argument).await;
+        self.wake.notify_one();
+        reply
+    }
+
+    pub async fn soundiya_slow(
+        &self,
+        command: &str,
+        argument: &str,
+        limit: Duration,
+    ) -> Result<String, String> {
+        soundiya::command_within(&self.socket, command, argument, limit).await
+    }
+
+    pub async fn tell_owners(&self, text: &str) {
+        for &owner in &self.config.users {
+            if let Err(e) = self.api.send(owner, &view::esc(text), None, false).await {
+                eprintln!("telegram: {e}");
+            }
+        }
+    }
+
+    fn admin_home(&self, access: &Access, mode: VoiceFrom) -> (String, serde_json::Value) {
+        admin::home(access, mode, self.panel_view(access))
+    }
+
+    /// The `/admin` line about the panel: its address and PIN while it is on.
+    fn panel_view(&self, access: &Access) -> Option<(String, String)> {
+        access.panel().then(|| {
+            (
+                self.panel.address(),
+                self.panel.auth.lock().unwrap().pin().to_owned(),
+            )
+        })
     }
 
     async fn state(&self) -> Result<State, String> {
@@ -1074,7 +1130,7 @@ impl Bot {
     async fn send_admin(&self, chat: i64) {
         // The mode first: `voice_mode` takes the same lock.
         let mode = self.voice_mode();
-        let (text, keyboard) = admin::home(&self.access.lock().unwrap(), mode);
+        let (text, keyboard) = self.admin_home(&self.access.lock().unwrap(), mode);
         if let Err(e) = self.api.send(chat, &text, Some(keyboard), true).await {
             eprintln!("telegram: admin: {e}");
         }
@@ -1094,7 +1150,7 @@ impl Bot {
         let mode = self.voice_mode();
         let mut toast = String::new();
         let view = match (action, id) {
-            ("home", _) => Some(admin::home(&self.access.lock().unwrap(), mode)),
+            ("home", _) => Some(self.admin_home(&self.access.lock().unwrap(), mode)),
             ("list", _) => Some(admin::list(
                 &self.access.lock().unwrap(),
                 &self.config.users,
@@ -1104,14 +1160,14 @@ impl Bot {
                 let next = admin::next_mode(mode);
                 self.access.lock().unwrap().voice_from = Some(next);
                 toast = format!("🎙 Голосовые: {}", admin::mode_text(next));
-                Some(admin::home(&self.access.lock().unwrap(), next))
+                Some(self.admin_home(&self.access.lock().unwrap(), next))
             }
             ("vv", _) if matches!(arg, "+" | "-") => {
                 let mut access = self.access.lock().unwrap();
                 let level = admin::step_volume(access.voice_volume(), arg == "+");
                 access.voice_volume = Some(level);
                 toast = format!("🎙 {level} %");
-                Some(admin::home(&access, mode))
+                Some(self.admin_home(&access, mode))
             }
             ("sm", _) => {
                 let mut access = self.access.lock().unwrap();
@@ -1123,7 +1179,27 @@ impl Bot {
                     "🗣 «Алиса, передай …» выключено"
                 }
                 .to_owned();
-                Some(admin::home(&access, mode))
+                Some(self.admin_home(&access, mode))
+            }
+            ("pn", _) => {
+                let mut access = self.access.lock().unwrap();
+                let on = !access.panel();
+                access.panel = Some(on);
+                toast = if on {
+                    "🌐 Веб-панель включена"
+                } else {
+                    "🌐 Веб-панель выключена"
+                }
+                .to_owned();
+                Some(self.admin_home(&access, mode))
+            }
+            ("pin", _) => {
+                let result = self.panel.auth.lock().unwrap().new_pin();
+                toast = match result {
+                    Ok(()) => "🔑 Новый PIN: все браузеры вышли".to_owned(),
+                    Err(e) => format!("⚠️ {e}"),
+                };
+                Some(self.admin_home(&self.access.lock().unwrap(), mode))
             }
             ("upd", _) => {
                 self.answer(query, "").await;
@@ -1180,7 +1256,7 @@ impl Bot {
             },
             _ => None,
         };
-        if matches!(action, "vm" | "vv" | "v" | "n" | "sm")
+        if matches!(action, "vm" | "vv" | "v" | "n" | "sm" | "pn")
             && let Err(e) = self.save_access()
         {
             toast = format!("⚠️ {e}");

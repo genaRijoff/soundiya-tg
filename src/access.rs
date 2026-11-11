@@ -28,6 +28,9 @@ pub struct Access {
     /// "Алиса, передай …" goes to the bot's users (`/admin`); off unless the owner turns it on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker_messages: Option<bool>,
+    /// The web panel in the home network (`/admin`); off unless the owner turns it on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +56,10 @@ impl Access {
         fs::write(&tmp, text).map_err(|e| e.to_string())?;
         fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
         fs::rename(&tmp, path).map_err(|e| e.to_string())
+    }
+
+    pub fn panel(&self) -> bool {
+        self.panel.unwrap_or(false)
     }
 
     pub fn speaker_messages(&self) -> bool {

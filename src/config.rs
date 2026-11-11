@@ -57,6 +57,13 @@ pub struct Config {
     /// The program that decodes them (Alice's `maind --gst-launch`); only tests change it.
     #[serde(default = "default_gst")]
     pub gst: String,
+    /// The web panel's port in the home network (it is turned on in `/admin`).
+    #[serde(default = "default_panel_port")]
+    pub panel_port: u16,
+}
+
+fn default_panel_port() -> u16 {
+    8765
 }
 
 fn yes() -> bool {

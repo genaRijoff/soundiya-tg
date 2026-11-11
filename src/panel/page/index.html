@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>soundiya</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="soundiya">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23ff5500'/%3E%3Cpath d='M26 44V20l18-4v24' fill='none' stroke='%23fff' stroke-width='5' stroke-linejoin='round'/%3E%3Ccircle cx='21' cy='44' r='6' fill='%23fff'/%3E%3Ccircle cx='39' cy='40' r='6' fill='%23fff'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#ff5500">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="bg" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+<main>
+  <header>
+    <h1>sound<span>iya</span></h1>
+    <div class="headright"><div class="state" id="state"></div></div>
+  </header>
+
+  <section class="login" id="login" hidden>
+    <h2>Вход в панель</h2>
+    <p>PIN — в Telegram-боте: /admin → «Веб-панель»</p>
+    <form id="loginform" autocomplete="off">
+      <input type="password" id="pin" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="••••••" aria-label="PIN" autocomplete="one-time-code">
+      <button class="primary" type="submit">Войти</button>
+    </form>
+    <div class="msg" id="loginmsg"></div>
+  </section>
+
+  <div id="app" hidden>
+  <section class="player">
+    <button class="icon psearchbtn" id="psearchbtn" title="Поиск" aria-label="Поиск" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button>
+    <div class="psearch" id="psearch" hidden>
+      <form class="search" id="searchform">
+        <input type="text" id="query" placeholder="Трек, исполнитель или ссылка soundcloud.com" autocomplete="off" enterkeyhint="search">
+        <button class="primary" type="submit">Найти</button>
+      </form>
+      <div class="msg" id="searchmsg"></div>
+      <div id="results"></div>
+    </div>
+    <div class="now">
+      <img class="cover" id="cover" alt="" hidden>
+      <div class="track" id="track">—</div>
+    </div>
+    <div class="seek" id="seek" title="Перемотать"><div class="bar"><i id="progress"></i></div><b class="seek-dot" id="seekdot"></b></div>
+    <div class="times"><span id="pos">0:00</span><span id="dur">0:00</span></div>
+    <div class="controls">
+      <button class="icon" data-cmd="prev" title="Назад" aria-label="Назад"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 5h2.4v14H6zM19 5.6v12.8a.6.6 0 0 1-.92.5L9.2 12.5a.6.6 0 0 1 0-1L18.08 5.1a.6.6 0 0 1 .92.5z"/></svg></button>
+      <button class="primary icon" id="toggle" data-cmd="toggle" title="Пауза / продолжить" aria-label="Пауза или продолжить"></button>
+      <button class="icon" data-cmd="next" title="Следующий" aria-label="Следующий"><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M15.6 5H18v14h-2.4zM5 5.6v12.8a.6.6 0 0 0 .92.5l8.88-6.4a.6.6 0 0 0 0-1L5.92 5.1A.6.6 0 0 0 5 5.6z"/></svg></button>
+    </div>
+    <div class="controls small">
+      <button class="icon" id="repeatbtn" title="Повтор трека" aria-label="Повтор трека"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></svg></button>
+      <button class="icon" id="sleepbtn" title="Таймер сна" aria-label="Таймер сна" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+      <button class="icon" data-cmd="similar" title="Включить похожие треки" aria-label="Похожие треки"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4"/><path d="M19 5a10 10 0 0 1 0 14"/><path d="M5 19A10 10 0 0 1 5 5"/></svg></button>
+      <span class="qwrap" id="qwrap">
+        <button class="icon" id="qbtn" title="Очередь" aria-label="Очередь" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/><path d="M17 16.5v4l3-2z" fill="currentColor"/></svg></button>
+        <div class="qpop" id="qpop" hidden>
+          <div class="qhead"><b>Очередь</b><small id="qcount"></small></div>
+          <ul class="list queue" id="queue"></ul>
+          <div class="empty" id="qempty">Пусто</div>
+        </div>
+      </span>
+      <button class="icon" id="openbtn" title="Открыть трек на SoundCloud" aria-label="Открыть на SoundCloud"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg></button>
+    </div>
+    <div class="volpop">
+      <div class="volline">
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M4 9h4l5-4v14l-5-4H4z"/></svg>
+        <input type="range" id="volrange" min="0" max="100" step="5" value="50" aria-label="Громкость, 0–100">
+        <b id="volval">–</b>
+      </div>
+    </div>
+    <div class="volpop" id="sleeppop" hidden>
+      <div class="sleeprow">
+        <span class="hint" id="sleeptext">Таймер сна</span>
+        <div class="seg" id="sleepseg" role="group" aria-label="Таймер сна">
+          <button data-min="0">выкл</button><button data-min="15">15</button><button data-min="30">30</button><button data-min="60">60</button><button data-min="90">90</button>
+        </div>
+      </div>
+    </div>
+    <div class="msg" id="actmsg"></div>
+  </section>
+
+  <nav>
+    <button data-tab="home" class="on">Главная</button>
+    <button data-tab="mine">Моя музыка</button>
+    <button data-tab="settings">Колонка</button>
+  </nav>
+
+  <section class="tab on" id="tab-home">
+    <div class="widget">
+      <div class="whead"><b>Для вас</b></div>
+      <div class="shelf" id="foryou"></div>
+      <div class="msg" id="homemsg"></div>
+    </div>
+    <div class="widget shelfbox" id="chartbox">
+      <div class="whead"><button class="link shelftitle" id="charttitle" title="Включить всё">В тренде</button></div>
+      <div class="genres" id="genres"></div>
+      <div class="shelf" id="chart"></div>
+      <div class="empty" id="chartempty">Загружаю…</div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-mine">
+    <div class="msg" id="minemsg"></div>
+    <div id="mineout" class="notice" hidden>
+      Лайки и плейлисты появятся после входа в SoundCloud на колонке: <b>soundiya login</b> — как в инструкции soundiya.
+    </div>
+    <div id="minein" hidden>
+      <div class="shelfbox" id="playlistbox">
+        <div class="whead"><b>Плейлисты</b></div>
+        <div class="shelf" id="playlists"></div>
+      </div>
+      <div class="empty" id="playlistsempty">Загружаю…</div>
+      <div class="listhead"><b>Лайки</b><button class="pill" id="likesall">Включить все</button></div>
+      <ul class="list" id="likes"></ul>
+      <div class="empty" id="likesempty">Загружаю…</div>
+    </div>
+  </section>
+
+  <section class="tab" id="tab-settings">
+    <h2>Колонка</h2>
+    <div class="about" id="about"></div>
+    <p class="hint">PIN меняется в Telegram: /admin → «🔑 Новый PIN» — после этого все браузеры выходят. Панель открывается только из домашней сети.</p>
+    <div class="row"><button id="logout">Выйти из панели</button></div>
+  </section>
+  </div>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

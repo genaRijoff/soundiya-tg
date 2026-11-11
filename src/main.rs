@@ -4,6 +4,7 @@ mod access;
 mod admin;
 mod bot;
 mod config;
+mod panel;
 mod soundiya;
 mod speaker;
 mod telegram;
@@ -101,10 +102,15 @@ fn run(config_path: PathBuf, socket: PathBuf) -> ExitCode {
         let seen = config_path.with_file_name("updates.json");
         let access = config_path.with_file_name("access.json");
         voice::reset_dir();
-        let bot = Arc::new(bot::Bot::new(api, config, socket, seen, access));
+        let panel = panel::Panel::new(
+            panel::auth::Auth::load(&config_path.with_file_name("panel.json")),
+            config.panel_port,
+        );
+        let bot = Arc::new(bot::Bot::new(api, config, socket, seen, access, panel));
         tokio::spawn(bot.clone().watch());
         tokio::spawn(bot.clone().watch_updates());
         tokio::spawn(bot.clone().watch_speaker());
+        tokio::spawn(panel::serve(bot.clone()));
         let mut terminate =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                 .map_err(|e| e.to_string())?;

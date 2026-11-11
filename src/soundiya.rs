@@ -37,6 +37,12 @@ pub struct Entry {
     pub artist: String,
     pub title: String,
     pub duration: u64,
+    /// The cover's address; missing in soundiya builds before the panel listings.
+    #[serde(default)]
+    pub art: String,
+    /// The track's soundcloud.com page; missing in builds before the panel listings.
+    #[serde(default)]
+    pub url: String,
 }
 
 impl State {
@@ -60,6 +66,16 @@ pub fn clean_argument(text: &str) -> String {
 }
 
 pub async fn command(socket: &Path, command: &str, argument: &str) -> Result<String, String> {
+    command_within(socket, command, argument, TIMEOUT).await
+}
+
+/// `command` with its own time limit: listings wait for SoundCloud.
+pub async fn command_within(
+    socket: &Path,
+    command: &str,
+    argument: &str,
+    limit: Duration,
+) -> Result<String, String> {
     let line = format!("{command} {}\n", clean_argument(argument));
     let exchange = async {
         let mut stream = UnixStream::connect(socket)
@@ -78,7 +94,7 @@ pub async fn command(socket: &Path, command: &str, argument: &str) -> Result<Str
             .map_err(|e| e.to_string())?;
         Ok::<_, String>(reply)
     };
-    let reply = timeout(TIMEOUT, exchange)
+    let reply = timeout(limit, exchange)
         .await
         .map_err(|_| "soundiya не отвечает".to_owned())??;
     parse_reply(&reply)

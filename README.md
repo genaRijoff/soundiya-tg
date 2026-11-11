@@ -20,18 +20,28 @@ Telegram-пульт для [soundiya](https://github.com/ShadowBlade83/soundiya)
 - 🎙 Голосовое сообщение — колонка проиграет его: музыка встанет на паузу и продолжится после (до 1 минуты и 2 МБ). Тихие и громкие записи выравниваются до одного уровня; `/voicevol` — поправка, `/voice all` — разрешить слушателям
 - Владелец и слушатели: друг пишет боту — тебе приходит запрос ✅/⛔
 - 🗣 «Алиса, передай Маше, что я буду через час» — фраза придёт Маше в Telegram, Алиса подтвердит. Включается в `/admin`
-- ⚙️ `/admin` — меню владельца: слушатели (голосовые, уведомления, удаление), режим и громкость голосовых, «передай», обновления
+- 🌐 Веб-панель в домашней сети: плеер, очередь, поиск, лайки, плейлисты, «Волна», чарты — с телефона или компьютера по PIN. Включается в `/admin`
+- ⚙️ `/admin` — меню владельца: слушатели (голосовые, уведомления, удаление), режим и громкость голосовых, «передай», веб-панель, обновления
 - Карточку со звуком получает тот, кто включил; `/notify on|off` у каждого свой
 - Обновления soundiya: [форк](https://github.com/genaRijoff/soundiya/releases) сам собирает каждую новую версию автора с `STATE`, бот сообщает и ставит по кнопке
 
-<details><summary>Скриншоты</summary>
+<details><summary>Скриншоты: бот</summary>
 <p align="center">
   <img src="docs/bot-card.jpg" height="440" alt="Карточка «что играет»">
   <img src="docs/bot-menu.jpg" height="440" alt="Меню команд">
 </p>
 </details>
 
-> Нужна soundiya с командами `STATE`/`JUMP` (для «передай» — `MESSAGES`/`SAY`, с `v0.1.10-bot.3`) — из [релизов форка](https://github.com/genaRijoff/soundiya/releases) (`v…-bot`): каждые 6 часов GitHub Actions переносит наши патчи ([`bot-api`](https://github.com/genaRijoff/soundiya/tree/bot-api)) на новую версию автора, гоняет тесты и выпускает релиз. Скрипт сборки берёт последний такой релиз.
+<details open><summary>Скриншоты: веб-панель</summary>
+<p align="center">
+  <img src="docs/panel-home.jpg" height="520" alt="Веб-панель: плеер и «Для вас»">
+  <img src="docs/panel-queue.jpg" height="520" alt="Веб-панель: очередь">
+  <img src="docs/panel-mine.jpg" height="520" alt="Веб-панель: плейлисты и лайки">
+</p>
+<p align="center"><sub>Исполнители, названия и обложки на снимках придуманы для примера.</sub></p>
+</details>
+
+> Нужна soundiya с командами `STATE`/`JUMP` (для «передай» — `MESSAGES`/`SAY`, с `v0.1.10-bot.3`; для веб-панели — `FIND`/`LIKES`/`PLAYIDS`, с `v0.1.10-bot.4`) — из [релизов форка](https://github.com/genaRijoff/soundiya/releases) (`v…-bot`): каждые 6 часов GitHub Actions переносит наши патчи ([`bot-api`](https://github.com/genaRijoff/soundiya/tree/bot-api)) на новую версию автора, гоняет тесты и выпускает релиз. Скрипт сборки берёт последний такой релиз.
 
 ## Что нужно
 
@@ -111,6 +121,7 @@ powershell -ExecutionPolicy Bypass -File .\windows\install-soundiya-build.ps1 -R
 | Поле | По умолчанию | |
 |---|---|---|
 | `token` | — | токен от @BotFather |
+| `panel_port` | `8765` | порт веб-панели (включается в `/admin`) |
 | `users` | — | id владельцев |
 | `notify` | `true` | новый трек со звуком |
 | `updates` | `true` | проверять GitHub раз в 6 ч |
@@ -119,7 +130,18 @@ powershell -ExecutionPolicy Bypass -File .\windows\install-soundiya-build.ps1 -R
 | `watch_issue` | `0` | номер issue, о котором сообщать (0 — выкл.) |
 | `voice` | `owners` | кто может слать голосовые: `owners`, `all` (и слушатели; владельцу приходит, кто прислал), `off`. Команда `/voice` меняет это из чата |
 
-Слушатели, `/notify`, `/voice`, `/voicevol` и «передай» хранятся в `access.json`, проверка обновлений — в `updates.json` (рядом, права 600). После правки: `/etc/init.d/S99soundiya-tg restart`.
+Слушатели, `/notify`, `/voice`, `/voicevol`, «передай» и включённая панель хранятся в `access.json`, проверка обновлений — в `updates.json`, PIN и вошедшие браузеры панели — в `panel.json` (рядом, права 600). После правки: `/etc/init.d/S99soundiya-tg restart`.
+
+## Веб-панель
+
+`/admin` → «🌐 Веб-панель: вкл» — бот покажет адрес (`http://<IP колонки>:8765`) и PIN. Открой адрес в браузере телефона или компьютера в той же Wi-Fi-сети, введи PIN; на телефоне панель можно добавить на экран «Домой».
+
+- Плеер с обложкой и перемоткой, очередь, громкость, таймер сна, повтор, «похожее», поиск (и ссылки soundcloud.com).
+- «Для вас»: **Волна** (треки, похожие на твои лайки, без самих лайков), **Мои лайки**, **Похожее**. Чарты «В тренде» по жанрам.
+- «Моя музыка»: плейлисты и лайки списком — нажал трек, играет он и следующие. Нужен вход в SoundCloud на колонке (`soundiya login`).
+- Нужна soundiya с командами панели (`FIND`, `LIKES`, `PLAYIDS` …), начиная с `v0.1.10-bot.4` из [релизов форка](https://github.com/genaRijoff/soundiya/releases) — ставится в боте: `/updates`.
+
+Внешний вид панели взят у [soundya](https://github.com/rodyatotu/soundya) от **rodyatotu** (MIT, текст лицензии — в начале [`app.css`](src/panel/page/app.css)); логика, сервер и защита — свои.
 
 ## Безопасность
 
@@ -130,15 +152,21 @@ powershell -ExecutionPolicy Bypass -File .\windows\install-soundiya-build.ps1 -R
 - Голосовые: только владельцу и отмеченным слушателям; до 1 минуты и 2 МБ. Длительность от Telegram не принимается на веру: раскодирование обрывается, как только выйдет больше минуты. Раскодирует их GStreamer Алисы от пользователя `nobody`, не root, а результат бот принимает только как обычный файл. Файлы лежат в закрытой папке и удаляются сразу после использования.
 - Меню `/admin`: каждая кнопка проверяется — только владелец, только существующий слушатель.
 - «Передай»: по умолчанию выключено, включает только владелец. Адресаты — только владельцы и одобренные слушатели; неизвестное или неоднозначное имя — ничего не отправляется. soundiya забирает фразы у Алисы, только пока бот их спрашивает.
+- Веб-панель: по умолчанию выключена; только из домашней сети (частные адреса), только по PIN из `/admin` (6 цифр, 5 неверных подряд — вход закрыт на 15 мин, владельцу приходит сообщение). Сессия — cookie HttpOnly + SameSite=Strict; команды принимаются только со страницы панели (Origin, JSON) и по локальному имени или IP (защита от DNS rebinding); строгий CSP, обложки только с sndcdn.com. Внутри дома соединение без шифрования (HTTP) — не включай панель в чужой сети. «🔑 Новый PIN» выкидывает все браузеры.
 - Остаётся: бот работает от root (нужно для сокета soundiya и установки обновлений); твой аккаунт Telegram = права владельца — включи облачный пароль.
 
 ## Тесты
 
 ```bash
 cargo test                                     # модульные
-cargo build && mkdir -p /tmp/e2e && for t in basic roles notify outage update voice admin speaker; do python3 tests/e2e/$t.py target/debug/soundiya-tg /tmp/e2e || break; done   # сквозные (подставные Telegram, GitHub и soundiya)
+cargo build && mkdir -p /tmp/e2e && for t in basic roles notify outage update voice admin speaker panel; do python3 tests/e2e/$t.py target/debug/soundiya-tg /tmp/e2e || break; done   # сквозные (подставные Telegram, GitHub и soundiya)
 ```
+
+## Спасибо
+
+- **[ShadowBlade83](https://github.com/ShadowBlade83)** — за [soundiya](https://github.com/ShadowBlade83/soundiya): SoundCloud голосом Алисы на Станции Мини, на которой всё это держится.
+- **[rodyatotu](https://github.com/rodyatotu)** — за [soundya](https://github.com/rodyatotu/soundya) и её красивую веб-панель: внешний вид нашей панели взят оттуда.
 
 ## Лицензия
 
-MIT. soundiya — © ShadowBlade83, MIT.
+MIT. soundiya — © ShadowBlade83, MIT. Вид веб-панели — © rodyatotu ([soundya](https://github.com/rodyatotu/soundya)), MIT.

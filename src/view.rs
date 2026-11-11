@@ -255,6 +255,7 @@ mod tests {
                     artist: format!("Artist {i}"),
                     title: format!("Song <{i}> & co"),
                     duration: 200,
+                    ..Entry::default()
                 })
                 .collect(),
         }
