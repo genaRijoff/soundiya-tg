@@ -41,6 +41,12 @@ echo "== soundiya ($SOUNDIYA_REF)"
 git clone -q --branch "$SOUNDIYA_REF" "$SOUNDIYA_REPO" "$WORK/soundiya"
 cd "$WORK/soundiya"
 git log --oneline -1
+# `soundiya version` (and the station's login summary) name what was built: a fork release
+# tag as is, anything else marked as a local build.
+case $SOUNDIYA_REF in
+    v*-bot*) export SOUNDIYA_RELEASE="$SOUNDIYA_REF" ;;
+    *) export SOUNDIYA_RELEASE="$SOUNDIYA_REF, local" ;;
+esac
 chmod +x scripts/*.sh
 cargo test --locked --bin soundiya
 sh scripts/bootstrap-arm.sh
